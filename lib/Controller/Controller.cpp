@@ -6,21 +6,21 @@
  * @param Kp Proportional gain.
  * @param Ki Integral gain.
  * @param Kd Derivative gain.
- * @param mass Mass of the rocket (kg).
- * @param area Reference area of the control surface (m²).
+ * @param mass_kg Mass of the rocket (kg).
+ * @param area_m2 Reference area of the control surface (m²).
  * @param dt Time step for the controller (s).
  * * @param print If true, prints the saved values to Serial Monitor for debugging.
  */
-Controller::Controller(float Kp, float Ki, float Kd, float mass, float area, float dt){
-    _mass = mass;
-    _area = area;
+Controller::Controller(float Kp, float Ki, float Kd, float mass_kg, float area_m2, float dt){
+    _mass_kg = mass_kg;
+    _area_m2 = area_m2;
     _Kp = Kp;
     _Ki = Ki;
     _Kd = Kd;
     _dt = dt;
     _min_output = 0;
     _max_output = 1;
-    _windup_limit = 1.0; // Valor padrão, pode ser ajustado
+    _windup_limit = 1.0; // Default windup limit for integral term
     _integral = 0.0;
     _previous_error = 0.0;
 }
@@ -39,9 +39,11 @@ Controller::~Controller(){
  * @return float Control output after applying PID algorithm.
  **/
 float Controller::computePID(float setpoint, float current_value) {
+    
+    // Proportional term
     float error = setpoint - current_value;
 
-    // 2. Calcula o termo integral com anti-windup
+    // Integrative term with anti-windup
     _integral += error * _dt;
     if (_integral > _windup_limit) {
         _integral = _windup_limit;
@@ -49,16 +51,16 @@ float Controller::computePID(float setpoint, float current_value) {
         _integral = -_windup_limit;
     }
 
-    // 3. Calcula o termo derivativo
+    // Derivative term
     float derivative = (error - _previous_error) / _dt;
 
-    // 4. Calcula a saída PID total
+    // Total PID output
     float output = (_Kp * error) + (_Ki * _integral) + (_Kd * derivative);
 
-    // 5. Salva o erro atual para a próxima iteração do derivativo
+    // Saves the current error for the next derivative calculation
     _previous_error = error;
 
-    // 6. Satura (clamp) a saída para os limites definidos
+    // Clamp output to limits
     if (output > _max_output) {
         output = _max_output;
     } else if (output < _min_output) {
@@ -124,13 +126,13 @@ float Controller::computeCd(float desiredApogee, float currentAltitude, float cu
         divisor1 = 2*(desiredApogee - currentAltitude);
     }
     float acc_desejado = - currentVelocity*currentVelocity / divisor1;
-    if (_area*rho*(currentVelocity*currentVelocity) < 1) {
+    if (_area_m2*rho*(currentVelocity*currentVelocity) < 1) {
         divisor2 = 1;
     }
     else {
-        divisor2 = _area*rho*(currentVelocity*currentVelocity);
+        divisor2 = _area_m2*rho*(currentVelocity*currentVelocity);
     }
-    float Cd_desired = - 2*_mass*(acc_desejado - gravity)/divisor2;
+    float Cd_desired = - 2*_mass_kg*(acc_desejado - gravity)/divisor2;
     if (Cd_desired < 0 || acc_desejado > 0) {
         return 0;
     }

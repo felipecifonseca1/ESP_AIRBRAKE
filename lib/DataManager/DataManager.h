@@ -27,14 +27,14 @@ struct ScaledFlightData {
     int16_t netVerticalAcceleration_scaled;
     int16_t tilt_scaled; 
     float barometricPressure_scaled;
-    int16_t servoAtuacao_scaled;
+    int16_t airbrakeDeployment_scaled;
     int16_t gain1_scaled;
     int16_t gain2_scaled;
     uint8_t flightState;
 }; 
 
 struct RawFlightData {
-    unsigned long timestamp;
+    u_int32_t timestamp;
     float accX, accY, accZ;
     float gyroX, gyroY, gyroZ;
     float magX, magY, magZ;
@@ -44,16 +44,16 @@ struct RawFlightData {
     float netVerticalAcceleration;
     float tilt; 
     float barometricPressure;
-    float servoAtuacao_percent;
+    float airbrakeDeployment;
     float gain1, gain2;
     int flightState;
 };
 
 struct HILSimulationData {
     bool dadosValidos = false; 
-    float tempo_s = 0.0f;
-    float pressao_Pa = 0.0f;
-    float aceleracaoLiquida_ms2 = 0.0f;
+    float time_s = 0.0f;
+    float barometricPressure_Pa = 0.0f;
+    float netVerticalAcceleration_ms2 = 0.0f;
     float tilt = 0.0f;
 };
 
@@ -124,7 +124,7 @@ private:
     String _currentSDFileName;
     bool _sdAvailable;
     uint8_t _sdRecordCounter;
-    uint8_t _sdFlushLimit = 50;
+    const uint8_t _sdFlushLimit = 50;
     const u_int8_t _pinCS_SD = 5; 
     const u_int8_t _pinSCK_SD = 18; 
     const u_int8_t _pinMOSI_SD = 23; 

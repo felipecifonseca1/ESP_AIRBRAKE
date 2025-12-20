@@ -30,7 +30,7 @@ DataManager::DataManager() :
  */
 bool DataManager::setupSD() {
     if (!ensureSDConnection()) {
-        DEBUG_PRINTLN_F("SD: ERROR - Falha ao montar cartao!");
+        DEBUG_PRINTLN_F("SD: ERROR - Failed to mount card!");
         _sdAvailable = false;
         return false;
     }
@@ -39,16 +39,17 @@ bool DataManager::setupSD() {
     if (!SD.exists(_logFolder)) SD.mkdir(_logFolder);
 
     _currentSDFileName = generateFileName();
-    DEBUG_PRINT_F("SD: Criando arquivo: ");
+    DEBUG_PRINT_F("SD: Creating file: ");
     DEBUG_PRINTLN(_currentSDFileName);
     _logFile = SD.open(_currentSDFileName, FILE_WRITE);
 
     if (_logFile) {
         // CSV Header
-        _logFile.println("Time,AccX,AccY,AccZ,GyroX,GyroY,GyroZ,MagX,MagY,MagZ,QW,QX,QY,QZ,AltFilt,VelFilt,AccVertLiq,Tilt,Pressao,Servo,G1,G2,Estado");
+
+        _logFile.println("Time[ms],AccX[g],AccY[g],AccZ[g],GyroX[°/s],GyroY[°/s],GyroZ[°/s],MagX[uT],MagY[uT],MagZ[uT],qW,qX,qY,qZ,AltFilt[m],VelFilt[m/s],AccVert[m/s^2],Tilt[°],PressBMP[Pa],Servo[%],PID_Gain,Cd_Gain,Estado");
         _logFile.flush();
         _sdAvailable = true;
-        DEBUG_PRINTLN_F("SD: Pronto.");
+        DEBUG_PRINTLN_F("SD: Ready.");
         return true;
     }
 
@@ -77,7 +78,7 @@ bool DataManager::setupFlash(bool eraseArea) {
  */
 void DataManager::startLogging() {
     _loggingActive = true;
-    DEBUG_PRINTLN_F("LOG: Iniciado.");
+    DEBUG_PRINTLN_F("LOG: Initialized.");
 }
 
 /**
@@ -88,7 +89,7 @@ void DataManager::stopLogging() {
     if (_sdAvailable && _logFile) {
         closeSDCard();
     }
-    DEBUG_PRINTLN_F("LOG: Parado.");
+    DEBUG_PRINTLN_F("LOG: Stopped.");
 }
 
 /**
@@ -100,7 +101,7 @@ void DataManager::stopLogging() {
  */
 void DataManager::setDecimationFactor(uint16_t factor) {
     _decimationFactor = (factor < 1) ? 1 : factor;
-     DEBUG_PRINT_F("LOG: Fator de decimacao ajustado para "); 
+    DEBUG_PRINT_F("LOG: Decimation factor set to "); 
      DEBUG_PRINTLN(_decimationFactor);
 }
 
@@ -113,7 +114,7 @@ void DataManager::closeSDCard() {
     if (_sdAvailable && _logFile) {
         _logFile.flush();
         _logFile.close();
-        DEBUG_PRINTLN_F("SD: Cartao SD fechado.");
+        DEBUG_PRINTLN_F("SD: SD card closed.");
         _sdAvailable = false;
         _loggingActive = false;
     }
@@ -130,7 +131,7 @@ void DataManager::closeSDCard() {
 void DataManager::logDataSD(const RawFlightData& data) {
     if (!_sdAvailable || !_logFile || !_loggingActive) return;
 
-    // Isso reduz a quantidade de dados salvos sem mudar o loop principal
+    // This reduces the amount of data saved without changing the main loop
    
     _decimationCounter++;
 
@@ -151,7 +152,7 @@ void DataManager::logDataSD(const RawFlightData& data) {
     //     (int)(data.netVerticalAcceleration * 1000),
     //     (int)(data.tilt * 10),
     //     (long)(data.barometricPressure),
-    //     (int)(data.servoAtuacao_percent * 10),
+    //     (int)(data.airbrakeDeployment * 10),
     //     (int)(data.gain1 * 1000), (int)(data.gain2 * 1000),
     //     data.flightState
     // );
@@ -167,7 +168,7 @@ void DataManager::logDataSD(const RawFlightData& data) {
         data.netVerticalAcceleration,
         data.tilt,
         data.barometricPressure,
-        data.servoAtuacao_percent,
+        data.airbrakeDeployment,
         data.gain1,
         data.gain2,
         data.flightState
@@ -200,7 +201,7 @@ void DataManager::logDataFlash(const RawFlightData& data) {
  **/
 bool DataManager::initHIL(const char* filename) {
     if (!ensureSDConnection()) {
-        DEBUG_PRINTLN_F("HIL ERRO: Failed to conect to SD.");
+        DEBUG_PRINTLN_F("HIL ERROR: Failed to connect to SD.");
         return false;
     }
     String HILFilePath = "";
@@ -219,12 +220,12 @@ bool DataManager::initHIL(const char* filename) {
      // Tries inside the logs folder
     else {
          String pathTemp = String(_logFolder) + "/" + String(filename);
-         if (SD.exists(pathTemp)) {
+             if (SD.exists(pathTemp)) {
              HILFilePath = pathTemp;
              DEBUG_PRINT_F("HIL: File found in logs folder: ");
              DEBUG_PRINTLN(HILFilePath);
          } else {
-             DEBUG_PRINT_F("HIL ERRO: Arquivo NAO encontrado: ");
+             DEBUG_PRINT_F("HIL ERROR: File NOT found: ");
              DEBUG_PRINTLN(filename);
              return false;
          }
@@ -269,9 +270,9 @@ HILSimulationData DataManager::readHILStep() {
     int p3 = line.indexOf(',', p2 + 1);
 
     if (p1 != -1 && p2 != -1 && p3 != -1) {
-        data.tempo_s = line.substring(0, p1).toFloat();
-        data.pressao_Pa = line.substring(p1+1, p2).toFloat();
-        data.aceleracaoLiquida_ms2 = line.substring(p2+1, p3).toFloat();
+        data.time_s = line.substring(0, p1).toFloat();
+        data.barometricPressure_Pa = line.substring(p1+1, p2).toFloat();
+        data.netVerticalAcceleration_ms2 = line.substring(p2+1, p3).toFloat();
         data.tilt = line.substring(p3+1).toFloat();
         data.dadosValidos = true;
     }
@@ -362,7 +363,7 @@ void DataManager::dumpCurrentLog() {
     } 
     f.close();
     Serial.println("\n==========================================");
-    Serial.println("--- FIM DO ARQUIVO ---");
+    Serial.println("--- END OF FILE ---");
 }
 
 /**
@@ -403,7 +404,7 @@ void DataManager::listFiles() {
  **/
 void DataManager::clearAllLogs() {
     if (!ensureSDConnection()) {
-        Serial.println("SD: Error to connect.");
+        Serial.println("SD: Error connecting.");
         return;
     }
 
@@ -458,11 +459,11 @@ void DataManager::clearAllLogs() {
  **/
 void DataManager::receiveHILFile(const char* HILFileName) {
     if (!ensureSDConnection()) {
-        Serial.println("Erro: SD not found.");
+        Serial.println("Error: SD not found.");
         return;
     }
     
-    // Reserva Buffer (200KB) *Mudar depois para algo parametrizavel*
+    // Reserve buffer (200KB) *Change later to something configurable*
     String bufferRAM;
     if (!bufferRAM.reserve(200000)) {
         Serial.println("Warning: Low memory.");
@@ -491,7 +492,7 @@ void DataManager::receiveHILFile(const char* HILFileName) {
             }
         }
 
-        // Verifica FIM
+        // Check for END
         if (bufferRAM.endsWith("END") || bufferRAM.endsWith("END\n") || bufferRAM.endsWith("END\r\n")) {
             recebendo = false;
             int posFim = bufferRAM.lastIndexOf("END");
@@ -518,9 +519,9 @@ void DataManager::receiveHILFile(const char* HILFileName) {
                 char prev = bufferRAM[i-1];
                 char next = bufferRAM[i+1];
                 
-                // Se o anterior é um dígito E o próximo é dígito ou sinal negativo
+                // If previous char is a digit AND next char is digit or negative sign
                 if (isDigit(prev) && (isDigit(next) || next == '-')) {
-                    bufferRAM[i] = '\n'; // Substitui espaço por Enter
+                    bufferRAM[i] = '\n'; // Replace space with newline
                     mudancas++;
                 }
             }

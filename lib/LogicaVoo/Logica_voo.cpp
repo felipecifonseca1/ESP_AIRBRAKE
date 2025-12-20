@@ -7,56 +7,56 @@
 
 #define MACH_VELOCITY 335
 
-// Configuracoes do servo
+// Servo configurations
 Servo airbrakeServo; // Servo object
 const uint8_t PIN_SERVO_AIRBRAKE = 27; 
-// Config 90 graus max ---> angulo real = angulo/2
-// *Necessario ajustar os valores min e max conforme o servo utilizado*
+// Config 90 degrees max ---> actual angle = angle/2
+// *Need to adjust min and max values according to the servo used*
 const uint16_t min_pulse = 560;  // 0°  - write(0)
 const uint16_t max_pulse = 1520; // 90° - write(180)
-bool test_servo = false;   // Sweep do servo
+bool test_servo = false;   // Servo sweep
 
-// Parametros para deteccao lancamento
-const float ACCEL_LIMIT_LAUNCH = 1.5f * G_CONSTANTE_GRAVITACIONAL_MS2; // m/s^2 
+// Parameters for launch detection
+const float ACCEL_LIMIT_LAUNCH = 1.5f * G_GRAVITATIONAL_CONSTANT; // m/s^2 
 const int8_t HEIGHT_LIMIT_LAUNCH = 4; // m
 
-// Parametros para deteccao burnout
+// Parameters for burnout detection
 const uint16_t MIN_MOTOR_BURN_TIME = 5000; // ms 
 const float ACCEL_LIMIT_BURNOUT = -0.5; // m/s^2 
 
-// Parametros para atuacao airbrakes
+// Parameters for airbrake actuation
 const uint16_t MIN_ACTUATION_HEIGHT = 500; // m
 const float VEL_LIMIT_ACTUACTION = 0.7 * MACH_VELOCITY;    // m/s
 
-// Parametros para deteccao apogeu
+// Parameters for apogee detection
 const float VEL_LIMIT_APOGEE = 1.0; // m/s 
-static float maxRecordedHeight = 0; // Para ajudar a confirmar
+static float maxRecordedHeight = 0; // To help confirm apogee
 static uint8_t consecutiveApogeeCount = 0;
 const uint8_t READINGS_FOR_APOGEE_CONFIRMATION = 25;
 
-// Parametros para deteccao pouso
+// Parameters for landing detection
 const float VEL_LIMIT_LANDING = 0.5;  // m/s
 const uint8_t ALT_LIMIT_LANDING = 10; // m
-const uint32_t MIN_TIME_AFTER_APOGEE_LANDING = 90000; // ms (1.5 min após apogeu para considerar pouso)
+const uint32_t MIN_TIME_AFTER_APOGEE_LANDING = 90000; // ms (1.5 min after apogee to consider landing)
 static uint32_t firstGroundDetectionTime = 0;
-const uint16_t MIN_TIME_LANDING = 5000; // ms (5s de condições estáveis de pouso)
+const uint16_t MIN_TIME_LANDING = 5000; // ms (5s of stable landing conditions)
 
 /**
  * @brief Initializes the servo for airbrake actuation.
  * @return true if the servo was successfully initialized, false otherwise.
  */
 bool setupServo() { 
-    DEBUG_PRINTLN_F("SETUP_SERVO: Inicializando servo ");
-    DEBUG_PRINT_F("SINALIZACAO: Configurando Servo no pino ");
+    DEBUG_PRINTLN_F("SETUP_SERVO: Initializing servo");
+    DEBUG_PRINT_F("SETUP_SERVO: Configuring Servo on pin ");
     DEBUG_PRINTLN(PIN_SERVO_AIRBRAKE);
     airbrakeServo.attach(PIN_SERVO_AIRBRAKE, min_pulse, max_pulse);
     airbrakeServo.write(0);
 
     if (airbrakeServo.attached()) {
-        DEBUG_PRINTLN_F("SINALIZACAO: Servo anexado com sucesso.");
+        DEBUG_PRINTLN_F("SETUP_SERVO: Servo attached successfully.");
         return true;
     } else {
-        DEBUG_PRINT_F("ERRO: Falha ao anexar o servo no pino ");
+        DEBUG_PRINT_F("ERROR: Failed to attach servo on pin ");
         DEBUG_PRINTLN(PIN_SERVO_AIRBRAKE);
         return false; 
     }
@@ -70,10 +70,10 @@ bool setupServo() {
  */
 void commandAirbrakes(float desiredPosition) {
 
-    // Converte a posição desejada para um ângulo de servo - 0 = 0° | 1.0 = 90(45°)° (abertura completa)
+    // Convert desired position to servo angle - 0 = 0° | 1.0 = 90(45°)° (full opening)
     int anguloServo = map(desiredPosition * 100, 0, 100, 0, 90); 
     airbrakeServo.write(anguloServo);
-    // DEBUG_PRINT_F("LOGICA_VOO: Comandando airbrakes para posicao (0-1): "); 
+    // DEBUG_PRINT_F("FLIGHT_LOGIC: Commanding airbrakes to position (0-1): "); 
     // DEBUG_PRINTLN(desiredPosition);
 }
 
@@ -82,7 +82,7 @@ void commandAirbrakes(float desiredPosition) {
  */
 void retractAirbrakes() {
     airbrakeServo.write(0); 
-    // DEBUG_PRINTLN_F("LOGICA_VOO: Airbrakes totalmente retraídos.");
+    // DEBUG_PRINTLN_F("FLIGHT_LOGIC: Airbrakes fully retracted.");
 }
 
 /**
@@ -95,36 +95,36 @@ void retractAirbrakes() {
  */
 bool checkFlightSystemHealth(float filteredAltitude, float filteredVerticalVelocity) {
 
-    bool saudeOk = true; 
+    bool healthOk = true; 
 
-    //Checagem IMU
+    // IMU Health Check
     float ax = mpu.getAccX(); float ay = mpu.getAccY(); float az = mpu.getAccZ();
     float accel_mag = sqrt(ax*ax + ay*ay + az*az);
-    if (accel_mag < 0.85f || accel_mag > 1.15f) { // Tolerância de +/- 0.15g
-        DEBUG_PRINTLN_F("LogicaVoo: Falha Saude - Magnitude Accel.");
-        saudeOk = false;
+    if (accel_mag < 0.85f || accel_mag > 1.15f) { // Tolerance of +/- 0.15g
+        DEBUG_PRINTLN_F("FlightLogic: Health Failure - Accel Magnitude.");
+        healthOk = false;
     }
-    if (abs(mpu.getGyroX()) > 3.0f || abs(mpu.getGyroY()) > 3.0f || abs(mpu.getGyroZ()) > 3.0f) { // Tolerância de 3 dps
-        DEBUG_PRINTLN_F("LogicaVoo: Falha Saude - Gyro alto.");
-        saudeOk = false;
+    if (abs(mpu.getGyroX()) > 3.0f || abs(mpu.getGyroY()) > 3.0f || abs(mpu.getGyroZ()) > 3.0f) { // Tolerance of 3 dps
+        DEBUG_PRINTLN_F("FlightLogic: Health Failure - High Gyro.");
+        healthOk = false;
     }
 
-    // Checagem Kalman 
-    if (abs(filteredAltitude) > 8.0f) { // Tolerância de +/- 8m no solo
-        DEBUG_PRINT_F("LogicaVoo: Falha Saude - Altitude Kalman: ");
+    // Kalman Filter Health Check
+    if (abs(filteredAltitude) > 4.0f) { // Tolerance of +/- 4m on ground
+        DEBUG_PRINT_F("FlightLogic: Health Failure - Altitude Kalman: ");
         DEBUG_PRINTLN(filteredAltitude);
-        saudeOk = false;
+        healthOk = false;
     }
-    if (abs(filteredVerticalVelocity) > 1.0f) { // Tolerância de +/- 1m/s
-        DEBUG_PRINT_F("LogicaVoo: Falha Saude - Velocidade Kalman: ");
+    if (abs(filteredVerticalVelocity) > 1.0f) { // Tolerance of +/- 1m/s
+        DEBUG_PRINT_F("FlightLogic: Health Failure - Velocity Kalman: ");
         DEBUG_PRINTLN(filteredVerticalVelocity);
-        saudeOk = false;
+        healthOk = false;
     }
     
-    // Checagem Servo
+    // Servo Health Check
     if (!airbrakeServo.attached()){
-        DEBUG_PRINTLN_F("LogicaVoo: Falha Saude - Conexão servo.");
-        saudeOk = false;
+        DEBUG_PRINTLN_F("FlightLogic: Health Failure - Servo connection.");
+        healthOk = false;
     }
 
     if (test_servo){
@@ -140,7 +140,7 @@ bool checkFlightSystemHealth(float filteredAltitude, float filteredVerticalVeloc
         test_servo = false;
     }
 
-    return saudeOk;
+    return healthOk;
 }
 
 /**
@@ -153,7 +153,7 @@ bool checkFlightSystemHealth(float filteredAltitude, float filteredVerticalVeloc
  */
 bool detectLaunch(float verticalAcceleration, float filteredAltitude) {
     if (verticalAcceleration > ACCEL_LIMIT_LAUNCH || filteredAltitude > HEIGHT_LIMIT_LAUNCH) {
-        DEBUG_PRINTLN_F("LOGICA_VOO: Lançamento detectado!");
+        DEBUG_PRINTLN_F("FLIGHT_LOGIC: Launch detected!");
         return true;
     }
     return false;
@@ -169,7 +169,7 @@ bool detectLaunch(float verticalAcceleration, float filteredAltitude) {
  */
 bool detectBurnout(float verticalAcceleration, unsigned long timeSinceLaunch) {
     if (timeSinceLaunch > MIN_MOTOR_BURN_TIME && verticalAcceleration < ACCEL_LIMIT_BURNOUT) {
-        DEBUG_PRINTLN_F("LOGICA_VOO: Burnout detectado.");
+        DEBUG_PRINTLN_F("FLIGHT_LOGIC: Burnout detected.");
         return true;
     }
     return false;
@@ -185,7 +185,7 @@ bool detectBurnout(float verticalAcceleration, unsigned long timeSinceLaunch) {
  */
 bool detectAirbrakesActuation(float filteredAltitude, float filteredVerticalVelocity) {
     if (filteredAltitude > MIN_ACTUATION_HEIGHT && filteredVerticalVelocity < VEL_LIMIT_ACTUACTION) {
-        DEBUG_PRINTLN_F("LOGICA_VOO: Condicoes para atuacao dos airbrakes atendidas.");
+        DEBUG_PRINTLN_F("FLIGHT_LOGIC: Conditions for airbrake actuation met.");
         return true;
     }
     return false;
@@ -204,20 +204,20 @@ bool detectApogee(float filteredVerticalVelocity, float filteredAltitude) {
     if (filteredAltitude > maxRecordedHeight) {
         maxRecordedHeight = filteredAltitude;
     }
-    // Incrementa o contador caso condicao seja atendida
+    // Increment counter if condition is met
     if (filteredVerticalVelocity < VEL_LIMIT_APOGEE) {
         consecutiveApogeeCount++;
-        DEBUG_PRINT_F("Condicao de apogeu atendida. Contagem: ");
+        DEBUG_PRINT_F("Apogee condition met. Count: ");
         DEBUG_PRINTLN(consecutiveApogeeCount);
 
     } else {
         consecutiveApogeeCount = 0;
     }
 
-    // Verifica o número de leituras consecutivas necessarias 
+    // Check if required consecutive readings are met
     if (consecutiveApogeeCount >= READINGS_FOR_APOGEE_CONFIRMATION) {
-        DEBUG_PRINTLN_F("LOGICA_VOO: APOGEU DETECTADO E CONFIRMADO!");
-        DEBUG_PRINT_F("Altitude Maxima Registrada: ");
+        DEBUG_PRINTLN_F("FLIGHT_LOGIC: APOGEE DETECTED AND CONFIRMED!");
+        DEBUG_PRINT_F("Maximum Recorded Altitude: ");
         DEBUG_PRINT(maxRecordedHeight, 2);
         DEBUG_PRINTLN_F("m");
         
@@ -247,11 +247,11 @@ bool detectLanding(float filteredVerticalVelocity, float filteredAltitude, unsig
             firstGroundDetectionTime = millis();
         }
         if (millis() - firstGroundDetectionTime >= MIN_TIME_LANDING) {
-            DEBUG_PRINTLN_F("LOGICA_VOO: Pouso detectado!");
+            DEBUG_PRINTLN_F("FLIGHT_LOGIC: Landing detected!");
             return true;
         }
     } else {
-        firstGroundDetectionTime = 0; // Reseta o contador se sair das condições de pouso
+        firstGroundDetectionTime = 0; // Reset counter if leaving landing conditions
     }
     return false;
 }
@@ -261,6 +261,6 @@ bool detectLanding(float filteredVerticalVelocity, float filteredAltitude, unsig
  * @return The current tilt angle in degrees.
  */
 float readCurrentTilt() {
-    return calcTilt(); // Função de Funcoes_suporte_IMU.h
+    return calcTilt(); 
 }
 

@@ -6,7 +6,7 @@
 
 class Controller{
     public:
-        Controller(float Kp, float Ki, float Kd, float mass, float area, float dt);
+        Controller(float Kp, float Ki, float Kd, float mass_kg, float area_m2, float dt);
         ~Controller();
 
         float computePID(float setPoint, float input);
@@ -17,8 +17,8 @@ class Controller{
 
     private:
     
-        float _mass;
-        float _area;
+        float _mass_kg;
+        float _area_m2;
 
         // Ganhos e estado do PID
         float _Kp, _Ki, _Kd;

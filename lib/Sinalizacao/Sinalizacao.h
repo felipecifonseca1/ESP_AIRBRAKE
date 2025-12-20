@@ -3,28 +3,28 @@
 
 #include <Arduino.h> 
 // --- Constantes dos Pinos ---
-const u_int8_t PINO_BUZZER = 14;
-const u_int8_t PINO_LED_STATUS_1 = 12; // Ex: LED 1
-const u_int8_t PINO_LED_STATUS_2 = 4; // Ex: LED 2
+const u_int8_t PIN_BUZZER = 14;
+const u_int8_t PIN_LED_STATUS_1 = 12; // Ex: LED 1
+const u_int8_t PIN_LED_STATUS_2 = 4; // Ex: LED 2
 
-// Configuração inicial dos pinos
+// Initial pin setup for signaling system
 void setupSinalizacao();
 
-// Funções básicas do Buzzer
-void buzzerOn(unsigned int frequency = 1000); // Liga o buzzer com uma frequência (Hz)
+// Basic buzzer functions
+void buzzerOn(unsigned int frequency = 1000); 
 void buzzerOff();
-void buzzerBeep(unsigned int duracao_ms, unsigned int frequency = 1000);
-void buzzerBeeps(int numero_beeps, unsigned int duracao_beep_ms, unsigned int duracao_pausa_ms, unsigned int frequency = 1000);
+void buzzerBeep(unsigned int duration, unsigned int frequency = 1000);
+void buzzerBeeps(int numberOfBeeps, unsigned int durationBeeps, unsigned int durationPause, unsigned int frequency = 1000);
 
-// Funções básicas dos LEDs
-void ledOn(int pino_led);
-void ledOff(int pino_led);
-void ledBlink(int pino_led, int numero_piscadas, unsigned int duracao_aceso_ms, unsigned int duracao_apagado_ms);
+// Basic LED functions
+void ledOn(int pin_led);
+void ledOff(int pin_led);
+void ledBlink(int pin_led, int numberOfBlinks, unsigned int durationOn, unsigned int durationOff);
 
-// Sinais de Startup
-void sinalizarInicioStartup(); // Ex: um beep longo e um LED aceso
-void sinalizarSucessoModulo(const char* nome_modulo); // Ex: beep curto, LED 1 pisca
-void sinalizarFalhaModulo(const char* nome_modulo);   // Ex: beeps de erro, LED 2 pisca
-void sinalizarSistemaPronto(); // Ex: múltiplos beeps curtos, ambos LEDs piscam e depois 1 fica aceso
+// Startup Signals
+void signalStartupStart(); 
+void signalSuccessfullModule(const char* moduleName); 
+void signalFailedModule(const char* moduleName  );   
+void signalStartupComplete(); 
 
 #endif // SINALIZACAO_H
