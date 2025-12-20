@@ -3,7 +3,7 @@
 
 
 // CONTROLE GLOBAL DE DEBUG SERIAL
-#define DEBUG_SERIAL_ENABLED 0 // 1 - debug | 0 - voo
+#define DEBUG_SERIAL_ENABLED 1 // 1 - debug | 0 - voo
 
 // Variaveis globais
 extern const float G_CONSTANTE_GRAVITACIONAL_MS2; // Aceleração gravidade m/s^2

@@ -1,8 +1,6 @@
 #ifndef KALMANFILTER_HH
 #define KALMANFILTER_HH
 
-#define ARDUINO_EIGEN_USE_STL
-
 #include <ArduinoEigenDense.h>
 
 
