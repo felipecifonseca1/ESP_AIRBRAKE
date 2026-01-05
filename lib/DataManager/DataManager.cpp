@@ -17,10 +17,11 @@ DataManager::DataManager() :
     _sdRecordCounter(0),
     _flash(_pinCS_Flash, 0xEF40), // Generic JEDEC ID for W25Q128
     _flashAddr(0),
-    _flashAvailable(false) 
+    _flashAvailable(false),
+    _currentHILMode(HILMode::NONE)
 {}
 
-// --- INITIALIZATION ---
+// --- Initialization ---
 
 /**
  * @brief Sets up logging on the SD card by creating a new log file.
@@ -71,7 +72,7 @@ bool DataManager::setupFlash(bool eraseArea) {
     return false;
 }
 
-// --- LOGGING CONTROL ---
+// --- Logging control ---
 
 /**
  * @brief Starts general logging.
@@ -120,7 +121,7 @@ void DataManager::closeSDCard() {
     }
 }
 
-// --- CORE LOGGING LOGIC ---
+// --- Core logging logic ---
 
 /**
  * @brief Records flight data to the SD card.
@@ -190,7 +191,34 @@ void DataManager::logDataFlash(const RawFlightData& data) {
     // Implement scale and write logic here
 }
 
-// --- HIL SIMULATION ---
+// --- HIL Simulation ---
+
+
+/**
+ * @brief Helper to detect CSV format based on column count (commas).
+ * @param headerLine Header line of the HIL .csv file.
+ */
+HILMode DataManager::detectHILFormat(String headerLine) {
+    int commaCount = 0;
+    for (char c : headerLine) {
+        if (c == ',') commaCount++;
+    }
+
+    // Simple Mode: time, pressure, acc_net, tilt (3 commas)
+    if (commaCount == 3) {
+        DEBUG_PRINTLN_F("HIL: Detected SIMPLE format (4 cols).");
+        return HILMode::SIMPLE;
+    }
+    
+    // Full Mode: time, acc(3), gyro(3), mag(3), press (10 commas)
+    if (commaCount >= 10) {
+        DEBUG_PRINTLN_F("HIL: Detected FULL SENSOR format (11+ cols).");
+        return HILMode::FULL;
+    }
+
+    DEBUG_PRINTLN_F("HIL: Unknown format.");
+    return HILMode::NONE;
+}
 
 /**
  * @brief Initiates a Hardware-in-the-Loop (HIL) simulation by loading data from a specified file on the SD card.
@@ -200,9 +228,11 @@ void DataManager::logDataFlash(const RawFlightData& data) {
  * @param filename The name of the file on the SD card containing HIL simulation data
  **/
 bool DataManager::initHIL(const char* filename) {
-    if (!ensureSDConnection()) {
-        DEBUG_PRINTLN_F("HIL ERROR: Failed to connect to SD.");
-        return false;
+    if (!_sdAvailable) {
+        if (!ensureSDConnection()) {
+            DEBUG_PRINTLN_F("HIL ERROR: Failed to connect to SD.");
+            return false;
+        }
     }
     String HILFilePath = "";
     // Tries to open the file as given
@@ -235,15 +265,22 @@ bool DataManager::initHIL(const char* filename) {
     if (_hilFile) {
         DEBUG_PRINTLN_F("HIL: File opened successfully.");
         if (_hilFile.available()) {
-            String header = _hilFile.readStringUntil('\n'); 
+            String header = _hilFile.readStringUntil('\n');
+            _currentHILMode = detectHILFormat(header);
             DEBUG_PRINT_F("HIL: Read header: ");
-            DEBUG_PRINTLN(header.substring(0, 60) + "..."); 
+            DEBUG_PRINTLN(header.substring(0, 60) + "...");
+
+            if (_currentHILMode == HILMode::NONE) {
+                _hilFile.close();
+                return false;
+                }
+            return true;
+
         } else {
             DEBUG_PRINTLN_F("HIL: Warning - File is empty.");
             _hilFile.close();
             return false;
         }
-        return true;
     } else {
         DEBUG_PRINTLN_F("HIL: Error - SD.open failed.");
         return false;
@@ -254,28 +291,69 @@ bool DataManager::initHIL(const char* filename) {
  * @brief Reads the next simulation step from the HIL simulation file.
  * @details This function reads the next line from the currently active HIL simulation file
  * on the SD card, parses the data, and returns it in a HILSimulationData struct. If the simulation
- * is not active or the file is not available, it returns a struct with dadosValidos set to false.
+ * is not active or the file is not available, it returns a struct with valid set to false.
  * @return A HILSimulationData struct containing the parsed simulation data.
  **/
 HILSimulationData DataManager::readHILStep() {
     HILSimulationData data;
-    if (!_hilFile || !_hilFile.available()){
-        data.dadosValidos = false;
-        return data;
-    } 
+    data.valid = false;
+
+    if (!_hilFile || !_hilFile.available()) return data;
     
     String line = _hilFile.readStringUntil('\n');
-    int p1 = line.indexOf(',');
-    int p2 = line.indexOf(',', p1 + 1);
-    int p3 = line.indexOf(',', p2 + 1);
+    line.trim(); // Remove \r if present
+    if (line.length() == 0) return data;
 
-    if (p1 != -1 && p2 != -1 && p3 != -1) {
-        data.time_s = line.substring(0, p1).toFloat();
-        data.barometricPressure_Pa = line.substring(p1+1, p2).toFloat();
-        data.netVerticalAcceleration_ms2 = line.substring(p2+1, p3).toFloat();
-        data.tilt = line.substring(p3+1).toFloat();
-        data.dadosValidos = true;
+    // Format: time, pressure, net_accel, tilt
+    if (_currentHILMode == HILMode::SIMPLE) {
+        int p1 = line.indexOf(',');
+        int p2 = line.indexOf(',', p1 + 1);
+        int p3 = line.indexOf(',', p2 + 1);
+
+        if (p1 != -1 && p2 != -1 && p3 != -1) {
+            data.time_s = line.substring(0, p1).toFloat();
+            data.barometricPressure_Pa = line.substring(p1+1, p2).toFloat();
+            data.netVerticalAcceleration_ms2 = line.substring(p2+1, p3).toFloat();
+            data.tilt = line.substring(p3+1).toFloat();
+            
+            data.hasFullIMU = false;
+            data.valid = true;
+        } 
+    } 
+
+    // Format: time, ax, ay, az, gx, gy, gz, mx, my, mz, pressure
+    else if (_currentHILMode == HILMode::FULL) {
+        
+        float values[11];
+        int currentIdx = 0;
+        int pStart = 0;
+        int pEnd = 0;
+
+        for (int i = 0; i < 11; i++) {
+            pEnd = line.indexOf(',', pStart);
+            if (pEnd == -1) pEnd = line.length();
+
+            String val = line.substring(pStart, pEnd);
+            values[i] = val.toFloat();
+            
+            pStart = pEnd + 1;
+            if (pStart > line.length()) break; // Safety break
+        }
+
+        data.time_s = values[0];
+        
+        // IMU Data
+        data.accX_ms2 = values[1]; data.accY_ms2 = values[2]; data.accZ_ms2 = values[3]; 
+        data.gyroX_rads = values[4]; data.gyroY_rads = values[5]; data.gyroZ_rads = values[6];
+        data.magX_T = values[7]; data.magY_T = values[8]; data.magZ_T = values[9];
+        
+        // Baro
+        data.barometricPressure_Pa = values[10];
+
+        data.hasFullIMU = true;
+        data.valid = true;
     }
+
     return data;
 }
 
@@ -297,7 +375,7 @@ void DataManager::stopHIL() {
     if (_hilFile) _hilFile.close();
 }
 
-// --- AUXILIARY METHODS ---
+// --- Auxilary tools ---
 
 /**
  * @brief Ensures the SD card is connected and mounted.
@@ -305,9 +383,22 @@ void DataManager::stopHIL() {
  */
 bool DataManager::ensureSDConnection() {
     if (SD.cardType() != CARD_NONE) return true;
+
+    pinMode(_pinCS_SD, OUTPUT);
+    digitalWrite(_pinCS_SD, HIGH);
+    
+    // If flash is connected
+    pinMode(_pinCS_Flash, OUTPUT);
+    digitalWrite(_pinCS_Flash, HIGH);
+
+    delay(50);
+
     SPI.begin(_pinSCK_SD, _pinMISO_SD, _pinMOSI_SD, _pinCS_SD); // Standard ESP32 VSPI pins
-    if (!SD.begin(_pinCS_SD)) {
-        return false;
+    if (!SD.begin(_pinCS_SD, SPI, 4000000)) {
+        DEBUG_PRINTLN_F("SD: Failed with 4MHz, trying 1MHz...");
+        if (!SD.begin(_pinCS_SD, SPI, 1000000)) {
+             return false;
+        }
     }
     return true;
 }

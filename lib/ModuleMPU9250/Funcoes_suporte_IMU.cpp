@@ -376,9 +376,9 @@ bool setup_IMU(bool calibrate_if_needed, bool perform_fine_tuning_on_calib, bool
     mpuConfig.gyro_dlpf_cfg = GYRO_DLPF_CFG::DLPF_41HZ;
     mpuConfig.accel_fchoice = 0x01;
     mpuConfig.accel_dlpf_cfg = ACCEL_DLPF_CFG::DLPF_45HZ;
-    // Configure magnetic declination (examples: Sp:-21.46, Pira:-21.47, Midland: 5.32, Munchen: 4.77)
+    // Configure magnetic declination (examples: Sp:-21.46, Pira:-21.47, Midland: 5.32, Munchen: 4.27)
     // CHANGE FOR COMPETITION if needed
-    mpu.setMagneticDeclination(5.32); // Adjust according to your actual launch location
+    mpu.setMagneticDeclination(4.27); // Adjust according to your actual launch location
 
     // Apply the initial flight configuration
     if (!mpu.setup(0x68, mpuConfig)) { 
@@ -478,8 +478,7 @@ float calcTilt() {
 
     float tilt_rad = acosf(cos_theta);
 
-    //  (180/PI ~= 57.29578)
-    float tilt_deg = tilt_rad * 57.29578f;
+    float tilt_deg = tilt_rad * RAD_TO_DEG;
 
     if (!z_axis_up){
         tilt_deg = (180.0f - tilt_deg);
@@ -507,9 +506,8 @@ float computeNetAcceleration() {
     float qy = mpu.getQuaternionY();
     float qz = mpu.getQuaternionZ();
     float qw = mpu.getQuaternionW();
-
+  
     // Raw accelerometer data in 'g'
-    // Note: MPU9250 typically returns acceleration in 'g' via getAcc methods.
     float ax_g = mpu.getAccX(); 
     float ay_g = -mpu.getAccY(); 
     float az_g = -mpu.getAccZ();

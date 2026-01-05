@@ -46,15 +46,31 @@ struct RawFlightData {
     float barometricPressure;
     float airbrakeDeployment;
     float gain1, gain2;
-    int flightState;
+    u_int8_t flightState;
 };
 
 struct HILSimulationData {
-    bool dadosValidos = false; 
+    bool valid = false; 
     float time_s = 0.0f;
+
+    // Processed data
     float barometricPressure_Pa = 0.0f;
     float netVerticalAcceleration_ms2 = 0.0f;
     float tilt = 0.0f;
+
+    // Full Sensor Mode Data 
+    float accX_ms2 = 0.0f, accY_ms2 = 0.0f, accZ_ms2 = 0.0f;
+    float gyroX_rads = 0.0f, gyroY_rads = 0.0f, gyroZ_rads = 0.0f;
+    float magX_T = 0.0f, magY_T = 0.0f, magZ_T = 0.0f;
+    
+    // Flags to tell the main loop what data is available
+    bool hasFullIMU = false; 
+};
+
+enum class HILMode {
+    NONE,
+    SIMPLE, // 3 Columns: Time, Pressure, NetAcc
+    FULL    // 11 Columns: Time, Acc(3), Gyro(3), Mag(3), Pressure
 };
 
 class DataManager {
@@ -62,12 +78,12 @@ public:
     // Access to Singleton
     static DataManager& getInstance();
 
-    // --- INITIALIZATION ---
+    // --- Initialization ---
 
     bool setupSD();
     bool setupFlash(bool erase = false);
     
-    // --- LOGGING CONTROL ---
+    // --- Logging control ---
 
     void startLogging();
     void stopLogging();
@@ -75,32 +91,31 @@ public:
     void setDecimationFactor(uint16_t factor);
     void closeSDCard(); 
 
-    // --- CORE LOGGING LOGIC ---
+    // --- Core logging logic ---
 
     void logDataSD(const RawFlightData& data);
     void logDataFlash(const RawFlightData& data);
     
-    // --- HIL SIMULATION ---
+    // --- HIL Simulation ---
 
     bool initHIL(const char* filename);
     HILSimulationData readHILStep();
     void stopHIL();
     void resetHIL();
 
-    // --- AUXILIARY METHODS ---
+    // --- Auxilary serial tools ---
 
     void listFiles();
     void dumpCurrentLog();
     void clearAllLogs();
     void receiveHILFile(const char* HILFileName);
 
-    // --- STATE GETTERS ---
+    // --- State getters ---
 
     String getCurrentFileName() const { return _currentSDFileName; }
     uint32_t getFlashAddress() const { return _flashAddr; }
 
     // Avoid copying the singleton
-
     DataManager(const DataManager&) = delete;
     void operator=(const DataManager&) = delete;
 
@@ -115,6 +130,7 @@ private:
     // State variables
     bool _loggingActive;
     bool _HILLoggingActive;
+    HILMode _currentHILMode = HILMode::NONE;
     uint16_t _decimationFactor;
     uint16_t _decimationCounter;
 
@@ -125,6 +141,8 @@ private:
     bool _sdAvailable;
     uint8_t _sdRecordCounter;
     const uint8_t _sdFlushLimit = 50;
+
+    // Pins VSPI
     const u_int8_t _pinCS_SD = 5; 
     const u_int8_t _pinSCK_SD = 18; 
     const u_int8_t _pinMOSI_SD = 23; 
@@ -136,8 +154,10 @@ private:
     bool _flashAvailable;
     const u_int8_t _pinCS_Flash = 15;
    
+    // Helpers
     bool ensureSDConnection();
     String generateFileName();
+    HILMode detectHILFormat(String headerLine);
 };
 
 #endif // DATA_MANAGER_H

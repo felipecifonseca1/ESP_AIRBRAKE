@@ -4,6 +4,9 @@
 #include <math.h>
 #include <Arduino.h>
 #include "Funcoes_suporte_IMU.h"
+#include <ArduinoEigenDense.h> 
+
+using namespace Eigen;
 
 #define MACH_VELOCITY 335
 
@@ -23,16 +26,17 @@ const int8_t HEIGHT_LIMIT_LAUNCH = 4; // m
 // Parameters for burnout detection
 const uint16_t MIN_MOTOR_BURN_TIME = 5000; // ms 
 const float ACCEL_LIMIT_BURNOUT = -0.5; // m/s^2 
+const int BURNOUT_CONFIRMATION_COUNT = 5; // Number of consecutive readings
+const int MOVING_AVERAGE_WINDOW_SIZE = 20;
 
 // Parameters for airbrake actuation
 const uint16_t MIN_ACTUATION_HEIGHT = 500; // m
 const float VEL_LIMIT_ACTUACTION = 0.7 * MACH_VELOCITY;    // m/s
 
 // Parameters for apogee detection
-const float VEL_LIMIT_APOGEE = 1.0; // m/s 
-static float maxRecordedHeight = 0; // To help confirm apogee
-static uint8_t consecutiveApogeeCount = 0;
-const uint8_t READINGS_FOR_APOGEE_CONFIRMATION = 25;
+const float VEL_LIMIT_APOGEE = 0.5; // m/s 
+const uint8_t READINGS_FOR_APOGEE_CONFIRMATION = 10; // Number of consecutive readings
+const int REGRESSION_WINDOW_SIZE = 30; // Size of the window for altitude regression
 
 // Parameters for landing detection
 const float VEL_LIMIT_LANDING = 0.5;  // m/s
@@ -168,7 +172,42 @@ bool detectLaunch(float verticalAcceleration, float filteredAltitude) {
  * @return true if motor burnout is detected, false otherwise.
  */
 bool detectBurnout(float verticalAcceleration, unsigned long timeSinceLaunch) {
-    if (timeSinceLaunch > MIN_MOTOR_BURN_TIME && verticalAcceleration < ACCEL_LIMIT_BURNOUT) {
+
+    static float bufferAcc[MOVING_AVERAGE_WINDOW_SIZE];
+    static int indexHead = 0;
+    static float movingSum = 0.0f;
+    static bool fullBuffer = false;
+    static int burnoutCounter = 0;
+
+    // Update moving average buffer
+    movingSum -= bufferAcc[indexHead];
+    bufferAcc[indexHead] = verticalAcceleration;
+    movingSum += bufferAcc[indexHead];
+
+    // Move head index
+    indexHead = (indexHead + 1) % MOVING_AVERAGE_WINDOW_SIZE;
+    
+    // Check if buffer is full
+    if (!fullBuffer && indexHead == 0) fullBuffer = true;
+
+    // Calculate moving average
+    float movingAverageAcc;
+    if (fullBuffer) {
+        movingAverageAcc = movingSum / MOVING_AVERAGE_WINDOW_SIZE;
+    } else {
+        int amostrasAtuais = (indexHead == 0) ? 1 : indexHead; 
+        movingAverageAcc = movingSum / (float)amostrasAtuais; 
+    }
+
+    // Check burnout condition
+    if (timeSinceLaunch > MIN_MOTOR_BURN_TIME && movingAverageAcc < ACCEL_LIMIT_BURNOUT) {
+        burnoutCounter++;
+    }
+    else {
+        burnoutCounter = 0;
+    }
+
+    if (burnoutCounter >= BURNOUT_CONFIRMATION_COUNT) {
         DEBUG_PRINTLN_F("FLIGHT_LOGIC: Burnout detected.");
         return true;
     }
@@ -197,10 +236,13 @@ bool detectAirbrakesActuation(float filteredAltitude, float filteredVerticalVelo
  *         for a certain number of consecutive readings.
  * @param filteredVerticalVelocity Current filtered vertical velocity (m/s).
  * @param filteredAltitude Current filtered altitude from Kalman filter (m).
+ * @param netVerticalAcceleration Current net vertical acceleration (m/s^2).
  * @return true if apogee is detected, false otherwise.
  */
 bool detectApogee(float filteredVerticalVelocity, float filteredAltitude) {
-    
+    static float maxRecordedHeight = 0; // To help confirm apogee
+    static uint8_t consecutiveApogeeCount = 0;
+    // Update max recorded height
     if (filteredAltitude > maxRecordedHeight) {
         maxRecordedHeight = filteredAltitude;
     }
@@ -224,6 +266,107 @@ bool detectApogee(float filteredVerticalVelocity, float filteredAltitude) {
         consecutiveApogeeCount = 0;     
         return true; 
     }
+    return false;
+}
+
+/**
+ * @brief Detects apogee by calculating a parabolic fit to altitude data.
+ * @details Uses the Least Squares method to solve h(t) = at^2 + bt + c.
+ * Apogee is confirmed if the curve is concave down (a < 0) and the 
+ * estimated velocity (derivative at current time) is negative.
+ * * @param filteredAltitude Current altitude (barometric or filtered) [m]
+ * @param currentTime_ms Current timestamp [ms]
+ * @return true if the vertex of the parabola has been passed.
+ */
+bool detectApogeeByRegression(float filteredAltitude, unsigned long currentTime_ms) {
+    // --- INTERNAL STATE ---
+    static float timeBuffer[REGRESSION_WINDOW_SIZE];
+    static float altBuffer[REGRESSION_WINDOW_SIZE];
+    static int headIndex = 0;
+    static int sampleCount = 0;
+    static bool apogeeConfirmed = false;
+
+    // If already detected, lock state and return true
+    if (apogeeConfirmed) return true;
+
+    // 1. Add new sample to Circular Buffer
+    // Convert ms to seconds to avoid overflow in power calculations (t^4)
+    timeBuffer[headIndex] = currentTime_ms / 1000.0f; 
+    altBuffer[headIndex] = filteredAltitude;
+    
+    headIndex = (headIndex + 1) % REGRESSION_WINDOW_SIZE;
+    
+    // Only start calculating when the buffer is full
+    if (sampleCount < REGRESSION_WINDOW_SIZE) {
+        sampleCount++;
+        return false; 
+    }
+
+    // 2. Time Normalization (Crucial for float precision)
+    // Use time relative to the oldest sample in the window (t0)
+    int oldestIndex = headIndex; // In a full buffer, head points to the oldest element
+    float t0 = timeBuffer[oldestIndex];
+
+    // 3. Accumulate Sums for Least Squares
+    double sum_t = 0, sum_t2 = 0, sum_t3 = 0, sum_t4 = 0;
+    double sum_y = 0, sum_ty = 0, sum_t2y = 0;
+
+    for (int i = 0; i < REGRESSION_WINDOW_SIZE; i++) {
+        int idx = (oldestIndex + i) % REGRESSION_WINDOW_SIZE;
+        
+        float t = timeBuffer[idx] - t0; // Relative time 
+        float y = altBuffer[idx];
+        double t2 = (double)t * t;
+        
+        sum_t += t;
+        sum_t2 += t2;
+        sum_t3 += t2 * t;
+        sum_t4 += t2 * t2;
+        
+        sum_y += y;
+        sum_ty += t * y;
+        sum_t2y = sum_t2y + (t2 * y);
+    }
+
+    // 4. Setup and Solve the Linear System 
+    // Matrix A * x = B
+    Matrix3f A;
+    A << REGRESSION_WINDOW_SIZE, sum_t,  sum_t2,
+         sum_t,                  sum_t2, sum_t3,
+         sum_t2,                 sum_t3, sum_t4;
+
+    Vector3f B;
+    B << sum_y, sum_ty, sum_t2y;
+
+    // Solve for x = [c, b, a] (where y = at^2 + bt + c)
+    // LDLT decomposition is faster than full inversion
+    Vector3f x = A.ldlt().solve(B);
+
+    float a = x[2]; // Quadratic coefficient (Concavity / Acceleration)
+    float b = x[1]; // Linear coefficient (Initial velocity)
+    // float c = x[0]; // Initial altitude (not used for decision)
+
+    // 5. Coefficient Analysis
+    
+    // A. Curve Concavity (2*a):
+    // Must be significantly negative to indicate a ballistic trajectory.
+    // If a > 0, the rocket would be curving upwards (impossible at apogee).
+    bool isConcave = (a < -0.05f);
+
+    // B. Estimated Velocity at the CURRENT instant (End of Window):
+    // Regression smooths out the velocity. v(t) = 2*a*t + b
+    float t_final = timeBuffer[(headIndex - 1 + REGRESSION_WINDOW_SIZE) % REGRESSION_WINDOW_SIZE] - t0;
+    float estimatedVelocity = 2.0f * a * t_final + b;
+
+    // Must be descending (< 0) with a small hysteresis margin
+    bool isDescending = (estimatedVelocity < -0.5f);
+
+    if (isConcave && isDescending) {
+        apogeeConfirmed = true;
+        // DEBUG_PRINTLN_F("APOGEE (Pure Regression) Confirmed!");
+        return true;
+    }
+
     return false;
 }
 

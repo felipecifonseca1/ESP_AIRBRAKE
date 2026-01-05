@@ -2,7 +2,7 @@
  * @file main.cpp
  * @brief Main flight software for ESP32 Airbrake System.
  * @details Integrates IMU, Barometer, Kalman Filter, PID Control, and Data Logging.
- * * @author Felipe Fonseca
+ ** @author Felipe Fonseca
  */
 
 #include <Arduino.h>
@@ -27,7 +27,7 @@
 #define EEPROM_SIZE 256 // Define EEPROM size
 
 // --- Global Variables ---
-bool calibrate_imu_on_startup = true;                     // Calibrate IMU on startup
+bool calibrate_imu_on_startup = false;                     // Calibrate IMU on startup
 bool print_imu_params = false;                            // Print IMU parameters after calibration
 bool perform_fine_tuning = false;                         // Fine tuning flag for IMU
 const float Ts_ms = 20.0;                                 // Loop time in ms (50Hz)
@@ -37,15 +37,21 @@ const uint32_t MAX_WAIT_TIME_LANDING = 600000;            // 10 minutes max wait
 const uint32_t LANDING_TIMEOUT = 120000;                  // 2 minutes safety timeout after landing detection
 bool serialCommActive = true;                             // Serial communication flag
 const float G_GRAVITATIONAL_CONSTANT = 9.80665f;          // Gravity acceleration in m/s^2
-const u_int8_t WDT_TIMEOUT_S = 5;                         // Watchdog timeout in seconds
+const int WDT_TIMEOUT_MS = 15000;                          // Watchdog timeout in milliseconds
+
+esp_task_wdt_config_t twdt_config = {
+    .timeout_ms = WDT_TIMEOUT_MS, 
+    .idle_core_mask = (1 << 0), 
+    .trigger_panic = true
+};
 
 // Flight State & Data
-RawFlightData flightData; // Struct from DataManager.h
+RawFlightData flightData; 
 HILSimulationData hilData;
 
 // --- Flight Mode Flags ---
-const bool HIL_MODE_ACTIVE = true; // true - HIL mode | false - Flight mode
-const char* HIL_FILENAME = "/Teste_HIL.csv";
+const bool HIL_MODE_ACTIVE =  true; // true - HIL mode | false - Flight mode
+const char* HIL_FILENAME = "/Teste_HIL_Sensors_no_bias.csv";
 
 // Matrices and Kalman Filter Initialization
 Eigen::Matrix<float, 2, 2> F_kf;
@@ -74,7 +80,7 @@ enum class FlightState {
     SENSOR_CALIBRATION,
     HEALTH_CHECK,
     WAIT_LAUNCH,
-    FLIGHT,
+    MOTOR_ON,
     BURNOUT,
     AIRBRAKE_DEPLOYMENT, 
     APOGEE,
@@ -145,7 +151,7 @@ void fullStateEstimateUpdate() {
         // --- HIL Mode: Read data from CSV file ---
         hilData = DataManager::getInstance().readHILStep();
         
-        if (!hilData.dadosValidos) {
+        if (!hilData.valid) {
             // End of HIL simulation
             if (DataManager::getInstance().isLoggingActive()) {
                 DataManager::getInstance().stopLogging();
@@ -153,18 +159,46 @@ void fullStateEstimateUpdate() {
             }
             return; 
         }
-        
+
         // Data from HIL
-        netVerticalAcceleration_ms2 = hilData.netVerticalAcceleration_ms2;
         barometricPressure_Pa = hilData.barometricPressure_Pa;
-        tilt_deg = 90 - hilData.tilt; // Convert tilt to match system definition
+        
+        // Lógica Adaptativa
+        if (hilData.hasFullIMU) {
+            float accX_g = hilData.accX_ms2 / G_GRAVITATIONAL_CONSTANT; 
+            float accY_g = hilData.accY_ms2 / G_GRAVITATIONAL_CONSTANT;
+            float accZ_g = hilData.accZ_ms2 / G_GRAVITATIONAL_CONSTANT;
+            
+            float gyroX_degs = hilData.gyroX_rads * RAD_TO_DEG;
+            float gyroY_degs = hilData.gyroY_rads * RAD_TO_DEG;
+            float gyroZ_degs = hilData.gyroZ_rads * RAD_TO_DEG;
+
+            float magX_mG = hilData.magX_T * 1e7;
+            float magY_mG = hilData.magY_T * 1e7;
+            float magZ_mG = hilData.magZ_T * 1e7;
+            
+            if (!mpu.update(accX_g, accY_g, accZ_g, gyroX_degs, gyroY_degs, gyroZ_degs, magX_mG, magY_mG, magZ_mG, false)) {
+                DEBUG_PRINTLN_F("Failed to update simulated IMU data!");
+                return; 
+            }
+            
+            netVerticalAcceleration_ms2 = computeNetAcceleration();
+            tilt_deg = readCurrentTilt();
+            
+
+        } else {
+            // Modo Simples 
+            netVerticalAcceleration_ms2 = hilData.netVerticalAcceleration_ms2;
+            tilt_deg = 90 - hilData.tilt; // Convert tilt to match system definition
+        }
+        
+
     } else {
         // --- Real Mode: Read data from sensors ---
         if (!mpu.update()) {
             DEBUG_PRINTLN_F("Failed to read IMU data!");
             return; 
         }
-        
         netVerticalAcceleration_ms2 = computeNetAcceleration();
         // DEBUG_PRINT_F("Attitude time:");
         // DEBUG_PRINTLN(millis() - attitudeTime);
@@ -182,11 +216,11 @@ void fullStateEstimateUpdate() {
     kf.Predict(U_kf);
 
     // Altitude Measurement from Barometer
-    float measuredAltitude = altitudeFromPressure(barometricPressure_Pa);
+    float measuredAltitude_m = altitudeFromPressure(barometricPressure_Pa);
     
-    if (measuredAltitude > -9000.0f) { // Check for valid altitude measurement
+    if (measuredAltitude_m > -9000.0f) { // Check for valid altitude measurement
         Eigen::Matrix<float, 2, 1> Z_kf;
-        Z_kf << measuredAltitude, 0.0f; // Zero velocity measurement for ZUKF
+        Z_kf << measuredAltitude_m, 0.0f; // Zero velocity measurement for ZUKF
         kf.Update(Z_kf, R_kf);
     } else {
         DEBUG_PRINTLN_F("WARNING: Invalid altitude measurement. Kalman Update skipped.");
@@ -202,30 +236,30 @@ void fullStateEstimateUpdate() {
 
 void updateLogger(){
     
-    flightData.timestamp = millis();
-    flightData.accX = mpu.getAccX();
-    flightData.accY = mpu.getAccY();
-    flightData.accZ = mpu.getAccZ();
-    flightData.gyroX = mpu.getGyroX();
-    flightData.gyroY = mpu.getGyroY();
-    flightData.gyroZ = mpu.getGyroZ();
-    flightData.magX = mpu.getMagX(); 
-    flightData.magY = mpu.getMagY();
-    flightData.magZ = mpu.getMagZ();
-    flightData.qW = mpu.getQuaternionW();
-    flightData.qX = mpu.getQuaternionX();
-    flightData.qY = mpu.getQuaternionY();
-    flightData.qZ = mpu.getQuaternionZ();
-    flightData.filteredAltitude = filteredAltitude_m; 
-    flightData.filteredVerticalVelocity = filteredVerticalVelocity_ms; 
-    flightData.netVerticalAcceleration = netVerticalAcceleration_ms2; 
-    flightData.tilt = tilt_deg; // lertilt()
-    flightData.barometricPressure = barometricPressure_Pa;
-    // flightData.barometricPressure =  getGroundPressureP0_BMP(); // For debugging
-    flightData.airbrakeDeployment = airbrakeDeployment; 
-    flightData.gain1 = controlGain1; 
-    flightData.gain2 = controlGain2; 
-    flightData.flightState = u_int8_t(flightState);
+    flightData.timestamp = millis();                                    // Timestamp [ms]
+    flightData.accX = mpu.getAccX();                                    // Body frame x axis acceleration [m/s²]
+    flightData.accY = mpu.getAccY();                                    // Body frame y axis acceleration [m/s²]
+    flightData.accZ = mpu.getAccZ();                                    // Body frame z axis acceleration [m/s²]
+    flightData.gyroX = mpu.getGyroX();                                  // Body frame x axis rotacional velocity [°/s]
+    flightData.gyroY = mpu.getGyroY();                                  // Body frame y axis rotacional velocity [°/s]
+    flightData.gyroZ = mpu.getGyroZ();                                  // Body frame z axis rotacional velocity [°/s]
+    flightData.magX = mpu.getMagX()/10.0;                               // Body frame x axis magnetic field [uT]
+    flightData.magY = mpu.getMagY()/10.0;                               // Body frame y axis magnetic field [uT]
+    flightData.magZ = mpu.getMagZ()/10.0;                               // Body frame z axis magnetic field [uT]
+    flightData.qW = mpu.getQuaternionW();                               // W quaternion component []
+    flightData.qX = mpu.getQuaternionX();                               // X quaternion component []
+    flightData.qY = mpu.getQuaternionY();                               // Y quaternion component []
+    flightData.qZ = mpu.getQuaternionZ();                               // Z quaternion component []
+    flightData.filteredAltitude = filteredAltitude_m;                   // Inertial frame filtered altitude (z) [m]
+    flightData.filteredVerticalVelocity = filteredVerticalVelocity_ms;  // Inertial frame filtered velocity (vz) [m/s]
+    flightData.netVerticalAcceleration = netVerticalAcceleration_ms2;   // Inertial frame net acceleration (az) [m/s²]
+    flightData.tilt = tilt_deg;                                         // Z axis tilt angle [°]
+    flightData.barometricPressure = barometricPressure_Pa;              // Barometric pressure [Pa]
+    // flightData.barometricPressure =  getGroundPressureP0_BMP();      // For debugging
+    flightData.airbrakeDeployment = airbrakeDeployment*100;             // Airbrake deployment [%]
+    flightData.gain1 = controlGain1;                                    // PID gain [-]
+    flightData.gain2 = controlGain2;                                    // Cd gain [-]
+    flightData.flightState = u_int8_t(flightState);                     // Flight state [-]
 }
 
 // --- State Machine Functions ---
@@ -310,14 +344,14 @@ void waitLaunchLoop() {
         R_kf(1,1) = 1000000000.0f; // Set high variance on velocity measurement to ignore zero input during flight
         logger.setDecimationFactor(1); // Save every 20ms during flight
 
-        flightState = FlightState::FLIGHT;
+        flightState = FlightState::MOTOR_ON;
         stateEntryTime = millis();
         launchDetectedTime = millis(); 
     }
 }
 
-void flightLoop() {
-    DEBUG_PRINT_F("STATE: FLIGHT | Alt: ");
+void motorOnLoop() {
+    DEBUG_PRINT_F("STATE: MOTOR_ON | Alt: ");
     DEBUG_PRINT(filteredAltitude_m);
     DEBUG_PRINT_F("m | VelZ: ");
     DEBUG_PRINT(filteredVerticalVelocity_ms);
@@ -393,12 +427,20 @@ void airbrakeDeploymentLoop() {
 
     commandAirbrakes(airbrakeDeployment);
 
-    if (detectApogee(filteredVerticalVelocity_ms, filteredAltitude_m)) { 
+    // if (detectApogee(filteredVerticalVelocity_ms, filteredAltitude_m)) { 
+    //     DEBUG_PRINTLN_F("APOGEE DETECTED!");
+    //     flightState = FlightState::APOGEE;
+    //     stateEntryTime = millis();
+    //     apogeeDetectedTime = millis();
+    // }
+
+     if (detectApogeeByRegression(filteredAltitude_m, millis())) { 
         DEBUG_PRINTLN_F("APOGEE DETECTED!");
         flightState = FlightState::APOGEE;
         stateEntryTime = millis();
         apogeeDetectedTime = millis();
     }
+     
 }
 
 void apogeeLoop() {
@@ -422,13 +464,13 @@ void apogeeLoop() {
 
 void descentLoop() {
 
-    if (HIL_MODE_ACTIVE == false) {
+    // if (HIL_MODE_ACTIVE == false) {
         DEBUG_PRINT_F("STATE: DESCENT | Alt: ");
         DEBUG_PRINT(filteredAltitude_m);
-        DEBUG_PRINT_F("m | VelZ:  ");
+        DEBUG_PRINT_F("m | VelZ: ");
         DEBUG_PRINT(filteredVerticalVelocity_ms);
         DEBUG_PRINTLN_F("m/s");
-    }
+    // }
  
 
     fullStateEstimateUpdate();
@@ -488,7 +530,7 @@ void setup() {
     Wire.begin();
     Wire.setClock(400000); // Set I2C to 400kHz - test different values if necessary ---> wire length influences
     
-    SPI.begin();
+    // SPI.begin();
     setupSinalizacao();
     signalStartupStart();
 
@@ -515,7 +557,7 @@ void setup() {
             
             HILSimulationData firstSample = logger.readHILStep();
             
-            if (firstSample.dadosValidos) {
+            if (firstSample.valid) {
                 float pressaoInicial = firstSample.barometricPressure_Pa;
                 setGroundPressureP0_BMP(pressaoInicial);
 
@@ -538,6 +580,7 @@ void setup() {
         }
 
     } else {
+
         DEBUG_PRINTLN_F("**** REAL FLIGHT MODE ACTIVATED ****");
         if (!setup_IMU(calibrate_imu_on_startup, perform_fine_tuning, print_imu_params)) {
             signalFailedModule("IMU");
@@ -590,7 +633,7 @@ void setup() {
     }
 
     DEBUG_PRINTLN("WDT: Initializing Watchdog...");
-    esp_task_wdt_init(WDT_TIMEOUT_S, true); // Timeout of 3 seconds
+    esp_task_wdt_init(&twdt_config); // Timeout of 3 seconds
     esp_task_wdt_add(NULL);; // Adds the current task (main loop) to the WDT
     DEBUG_PRINTLN("WDT: Active.");
 
@@ -618,8 +661,8 @@ void loop() {
             case FlightState::WAIT_LAUNCH:
                 waitLaunchLoop();
                 break;
-            case FlightState::FLIGHT:
-                flightLoop();
+            case FlightState::MOTOR_ON:
+                motorOnLoop();
                 break;
             case FlightState::BURNOUT:
                 loopBurnout();

@@ -217,13 +217,22 @@ public:
     bool available() {
         return has_connected && (read_byte(mpu_i2c_addr, INT_STATUS) & 0x01);
     }
+    /*@param a Acceleration in  [g]
+      @param g Gyroscope    in  [deg/s]
+      @param m Magnetometer in  [mG]
+      @param autoUpdate If true, read data from sensors before updating filter, else uses provided data.
+    */
+    bool update(float ax = 0.0f, float ay = 0.0f, float az = 0.0f, float gx = 0.0f, float gy = 0.0f, float gz = 0.0f, float mx = 0.0f, float my = 0.0f, float mz = 0.0f, bool autoUpdate = true) {
 
-    bool update() {
-        if (!available()) return false;
-
-        update_accel_gyro();
-        update_mag();
-
+        if (autoUpdate) {
+            if (!available()) return false;
+            update_accel_gyro();
+            update_mag();
+        } else {
+            a[0] = ax; a[1] = ay; a[2] = az;
+            g[0] = gx; g[1] = gy; g[2] = gz;
+            m[0] = mx; m[1] = my; m[2] = mz;
+        }
         // Madgwick function needs to be fed North, East, and Down direction like
         // (AN, AE, AD, GN, GE, GD, MN, ME, MD)
         // Accel and Gyro direction is Right-Hand, X-Forward, Z-Up
