@@ -11,8 +11,8 @@ enum class QuatFilterSel {
 
 class QuaternionFilter {
     // for madgwick
-    float GyroMeasError = PI * (3.0f / 180.0f);     // testar melhores valores
-    float GyroMeasDrift = PI * (2.0f / 180.0f);      // gyroscope measurement drift in rad/s/s 
+    float GyroMeasError = PI * (1.0f / 180.0f);     // testar melhores valores
+    float GyroMeasDrift = PI * (1.0f / 180.0f);      // gyroscope measurement drift in rad/s/s 
     float beta = sqrt(3.0f / 4.0f) * GyroMeasError;  // compute beta
     float zeta = sqrt(3.0f / 4.0f) * GyroMeasDrift;  // compute zeta, the other free parameter in the Madgwick scheme usually set to a small or zero value
 
@@ -43,11 +43,12 @@ public:
         beta = sqrt(3.0f / 4.0f) * gyroErr;
     }
 
-    void update(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz, float* q) {
-        newTime = micros();
-        deltaT = newTime - oldTime;
-        oldTime = newTime;
-        deltaT = fabs(deltaT * 0.001 * 0.001);
+    void update(float dt, float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz, float* q) {
+        // newTime = micros();
+        // deltaT = newTime - oldTime;
+        // oldTime = newTime;
+        // deltaT = fabs(deltaT * 0.001 * 0.001);
+        deltaT = dt;
 
         switch (filter_sel) {
             case QuatFilterSel::MADGWICK:
@@ -149,8 +150,6 @@ public:
         s2 *= recipNorm;
         s3 *= recipNorm;
 
-        // --- INICIO DA CORREÇÃO ZETA (DRIFT) ---
-        // 1. APRENDIZADO (Se ativado, acumula o erro no w_bx, w_by, w_bz)
         if (useZeta) {
             double s_w_x = 2.0f * (q0 * s1 - q1 * s0 - q2 * s3 + q3 * s2);
             double s_w_y = 2.0f * (q0 * s2 + q1 * s3 - q2 * s0 - q3 * s1);
@@ -161,13 +160,10 @@ public:
             w_bz += zeta * s_w_z * deltaT;
         }
 
-        // 2. APLICAÇÃO (Sempre subtrai o erro aprendido da leitura atual)
         gx -= w_bx;
         gy -= w_by;
-        gz -= w_bz;
-        // ---------------------------------------
+        gz -= w_bz; 
 
-        // Apply feedback step (Usando o gx, gy, gz corrigidos pelo bias)
         qDot1 = 0.5f * (-q1 * gx - q2 * gy - q3 * gz) - beta * s0;
         qDot2 = 0.5f * (q0 * gx + q2 * gz - q3 * gy) - beta * s1;
         qDot3 = 0.5f * (q0 * gy - q1 * gz + q3 * gx) - beta * s2;

@@ -175,8 +175,8 @@ public:
         b_ahrs = b;
     }
 
-    void calibrateAccelGyro() {
-        calibrate_acc_gyro_impl();
+    void calibrateAccelGyro(bool z_axis_down = true) {
+        calibrate_acc_gyro_impl(z_axis_down);
     }
 
     void calibrateMag() {
@@ -222,7 +222,7 @@ public:
       @param m Magnetometer in  [mG]
       @param autoUpdate If true, read data from sensors before updating filter, else uses provided data.
     */
-    bool update(float ax = 0.0f, float ay = 0.0f, float az = 0.0f, float gx = 0.0f, float gy = 0.0f, float gz = 0.0f, float mx = 0.0f, float my = 0.0f, float mz = 0.0f, bool autoUpdate = true) {
+    bool update(float dt = 0.02f, bool ignore_acc = false, bool autoUpdate = true, float ax = 0.0f, float ay = 0.0f, float az = 0.0f, float gx = 0.0f, float gy = 0.0f, float gz = 0.0f, float mx = 0.0f, float my = 0.0f, float mz = 0.0f) {
 
         if (autoUpdate) {
             if (!available()) return false;
@@ -232,6 +232,10 @@ public:
             a[0] = ax; a[1] = ay; a[2] = az;
             g[0] = gx; g[1] = gy; g[2] = gz;
             m[0] = mx; m[1] = my; m[2] = mz;
+        }
+
+        if (ignore_acc){
+            a[0] = 0; a[1] = 0; a[2] = 0;
         }
         // Madgwick function needs to be fed North, East, and Down direction like
         // (AN, AE, AD, GN, GE, GD, MN, ME, MD)
@@ -247,7 +251,7 @@ public:
         // gyro will be convert from [deg/s] to [rad/s] inside of this function
         // quat_filter.update(-a[0], a[1], a[2], g[0] * DEG_TO_RAD, -g[1] * DEG_TO_RAD, -g[2] * DEG_TO_RAD, m[1], -m[0], m[2], q);
 
-        float an = -a[0];
+        float an = +a[0];
         float ae = +a[1];
         float ad = +a[2];
         float gn = +g[0] * DEG_TO_RAD;
@@ -258,7 +262,7 @@ public:
         float md = +m[2];
 
         for (size_t i = 0; i < n_filter_iter; ++i) {
-            quat_filter.update(an, ae, ad, gn, ge, gd, mn, me, md, q);
+            quat_filter.update(dt, an, ae, ad, gn, ge, gd, mn, me, md, q);
         }
 
         if (!b_ahrs) {
@@ -270,8 +274,8 @@ public:
         return true;
     }
 
-    void resetOrientation(bool z_axis_up) {
-        if (z_axis_up){
+    void resetOrientation(bool z_axis_down) {
+        if (z_axis_down){
             q[0] = 1.0f;
             q[1] = 0.0f;
             q[2] = 0.0f;
@@ -282,7 +286,11 @@ public:
             q[2] = 0.0f; 
             q[3] = 0.0f; 
         }
-
+        Serial.print("Quaternion: ");
+        Serial.print(q[0], 4); Serial.print(", "); // w
+        Serial.print(q[1], 4); Serial.print(", "); // x
+        Serial.print(q[2], 4); Serial.print(", "); // y
+        Serial.println(q[3], 4);                  // z
     }
 
     void setDriftLearning(bool enabled) {
@@ -514,6 +522,7 @@ public:
         lin_acc[2] = a[2] - a33;
     }
 
+    float error_in_g = -4096.0f / 2048.0f;
     void update_accel_gyro() {
         int16_t raw_acc_gyro_data[7];        // used to read all 14 bytes at once from the MPU9250 accel/gyro
         read_accel_gyro(raw_acc_gyro_data);  // INT cleared on any read
@@ -522,6 +531,16 @@ public:
         a[0] = (float)raw_acc_gyro_data[0] * acc_resolution;  // get actual g value, this depends on scale being set
         a[1] = (float)raw_acc_gyro_data[1] * acc_resolution;
         a[2] = (float)raw_acc_gyro_data[2] * acc_resolution;
+        if (acc_resolution == 16.0 / 32768.0){
+            a[2]-= error_in_g;
+        }
+        
+        // Serial.print("Raw X: ");
+        // Serial.print((float)raw_acc_gyro_data[0]);
+        // Serial.print("| Raw y: ");
+        // Serial.print((float)raw_acc_gyro_data[1]);
+        // Serial.print("| Raw Z: ");
+        // Serial.println((float)raw_acc_gyro_data[2]);
 
         temperature_count = raw_acc_gyro_data[3];                  // Read the adc values
         temperature = ((float)temperature_count) / 333.87 + 21.0;  // Temperature in degrees Centigrade
@@ -593,9 +612,9 @@ private:
     // of the at-rest readings and then loads the resulting offsets into accelerometer and gyro bias registers.
     // ACCEL_FS_SEL: 2g (maximum sensitivity)
     // GYRO_FS_SEL: 250dps (maximum sensitivity)
-    void calibrate_acc_gyro_impl() {
+    void calibrate_acc_gyro_impl(bool z_axis_down = true) {
         set_acc_gyro_to_calibration();
-        collect_acc_gyro_data_to(acc_bias, gyro_bias);
+        collect_acc_gyro_data_to(acc_bias, gyro_bias, z_axis_down);
         write_accel_offset();
         write_gyro_offset();
         delay(100);
@@ -635,7 +654,7 @@ private:
         delay(40);                                  // accumulate 40 samples in 40 milliseconds = 480 bytes
     }
 
-    void collect_acc_gyro_data_to(float* a_bias, float* g_bias) {
+    void collect_acc_gyro_data_to(float* a_bias, float* g_bias, bool z_axis_down = true) {
         // At end of sample accumulation, turn off FIFO sensor read
         uint8_t data[12];                                    // data array to hold accelerometer and gyro x, y, z, data
         write_byte(mpu_i2c_addr, FIFO_EN, 0x00);             // Disable gyro and accelerometer sensors for FIFO
@@ -667,11 +686,12 @@ private:
         g_bias[1] /= (float)packet_count;
         g_bias[2] /= (float)packet_count;
 
-        if (a_bias[2] > 0L) {
-            a_bias[2] -= (float)CALIB_ACCEL_SENSITIVITY;
-        }  // Remove gravity from the z-axis accelerometer bias calculation
-        else {
+        if (z_axis_down) {
+            // Sensor is flat with Z pointing down.
             a_bias[2] += (float)CALIB_ACCEL_SENSITIVITY;
+        } else {
+            // Sensor is flat with Z pointing up.
+            a_bias[2] -= (float)CALIB_ACCEL_SENSITIVITY;
         }
     }
 

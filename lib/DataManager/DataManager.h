@@ -44,9 +44,9 @@ struct RawFlightData {
     float netVerticalAcceleration;
     float tilt; 
     float barometricPressure;
-    float airbrakeDeployment;
+    int airbrakeDeployment;
     float gain1, gain2;
-    u_int8_t flightState;
+    int flightState;
 };
 
 struct HILSimulationData {
@@ -103,12 +103,13 @@ public:
     void stopHIL();
     void resetHIL();
 
-    // --- Auxilary serial tools ---
+    // --- Auxilary tools ---
 
     void listFiles();
     void dumpCurrentLog();
     void clearAllLogs();
     void receiveHILFile(const char* HILFileName);
+    void runFrequencyTest(uint32_t freq, u_int16_t flushLimit,u_int16_t numberOfRecords, bool onlyPrintf = true);
 
     // --- State getters ---
 
@@ -137,10 +138,12 @@ private:
     // SD Card
     File _logFile;
     File _hilFile;
+
     String _currentSDFileName;
     bool _sdAvailable;
     uint8_t _sdRecordCounter;
     const uint8_t _sdFlushLimit = 50;
+    const uint32_t PRE_ALLOC_SIZE = 20 * 1024 * 1024; // 20 Mb files
 
     // Pins VSPI
     const u_int8_t _pinCS_SD = 5; 
@@ -152,12 +155,19 @@ private:
     SPIFlash _flash;
     uint32_t _flashAddr;
     bool _flashAvailable;
-    const u_int8_t _pinCS_Flash = 15;
+    const u_int8_t _pinCS_Flash = 4;
+
+    // Stabilization variables
+    bool _hilStabilizing;             // Flag to indicate stabilization state
+    unsigned long _hilStartTimeMS;   
+    const unsigned long _hilStabilizationDurationMS = 20000; // Stabilization time 5s
+    HILSimulationData _staticHILFrame; // Data from the first line
    
     // Helpers
     bool ensureSDConnection();
     String generateFileName();
     HILMode detectHILFormat(String headerLine);
+    HILSimulationData parseHILLine(String line);
 };
 
 #endif // DATA_MANAGER_H

@@ -30,9 +30,9 @@ const float ALPHA_MOVING_AVERAGE = 0.01f;
  *          and collects reference readings for ground pressure (P0) and temperature (T0).
  **/
 bool setupBMP() {
-    DEBUG_PRINTLN_F("SETUP_BMP: cONFIGURING BMP280..."); 
+    DEBUG_PRINTLN_F("SETUP_BMP: CONFIGURING BMP280..."); 
     if (!bmp_sensor_obj.begin(BMP280_I2C_ADAFRUIT_ADDRESS)) {
-        DEBUG_PRINTLN("ERROr: Could not find BMP280!");
+        DEBUG_PRINTLN("ERROR: Could not find BMP280!");
         return false;
     }
     DEBUG_PRINTLN("SETUP_BMP: BMP280 initialized successfully.");

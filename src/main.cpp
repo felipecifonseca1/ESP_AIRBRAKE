@@ -11,6 +11,8 @@
 #include <ESP32Servo.h>
 #include <EEPROM.h>
 #include <esp_task_wdt.h>
+// #include <WiFi.h>
+// #include <esp_bt.h>
 
 // Modules
 #include "Funcoes_suporte_IMU.h" 
@@ -30,28 +32,30 @@
 bool calibrate_imu_on_startup = false;                     // Calibrate IMU on startup
 bool print_imu_params = false;                            // Print IMU parameters after calibration
 bool perform_fine_tuning = false;                         // Fine tuning flag for IMU
-const float Ts_ms = 20.0;                                 // Loop time in ms (50Hz)
+const float Ts_ms = 20.0f;                                 // Loop time in ms (50Hz)
 const float Ts = Ts_ms / 1000.0f;                         // Loop time in seconds
 uint32_t previousLoopTime = 0;                            // Stores previous loop time
 const uint32_t MAX_WAIT_TIME_LANDING = 600000;            // 10 minutes max wait time for landing 
 const uint32_t LANDING_TIMEOUT = 120000;                  // 2 minutes safety timeout after landing detection
 bool serialCommActive = true;                             // Serial communication flag
 const float G_GRAVITATIONAL_CONSTANT = 9.80665f;          // Gravity acceleration in m/s^2
+u_int8_t print_count = 5; 
 const int WDT_TIMEOUT_MS = 15000;                          // Watchdog timeout in milliseconds
 
 esp_task_wdt_config_t twdt_config = {
     .timeout_ms = WDT_TIMEOUT_MS, 
     .idle_core_mask = (1 << 0), 
     .trigger_panic = true
-};
+}; 
 
 // Flight State & Data
 RawFlightData flightData; 
 HILSimulationData hilData;
 
 // --- Flight Mode Flags ---
-const bool HIL_MODE_ACTIVE =  true; // true - HIL mode | false - Flight mode
+const bool HIL_MODE_ACTIVE =  false; // true - HIL mode | false - Flight mode
 const char* HIL_FILENAME = "/Teste_HIL_Sensors_no_bias.csv";
+const bool HIL_MODE_Z_DOWN = true; // true - Z axis down | false - Z axis up
 
 // Matrices and Kalman Filter Initialization
 Eigen::Matrix<float, 2, 2> F_kf;
@@ -64,16 +68,16 @@ Eigen::Matrix<float, 2, 1> X0_kf;
 KalmanFilter kf;
 
 // Variables to store flight parameters
-float filteredAltitude_m = 0.0;
-float filteredVerticalVelocity_ms = 0.0;
-float netVerticalAcceleration_ms2 = 0.0; 
+float filteredAltitude_m = 0.0f;
+float filteredVerticalVelocity_ms = 0.0f;
+float netVerticalAcceleration_ms2 = 0.0f; 
 float barometricPressure_Pa = 0.0f;
-float tilt_deg = 0.0;
-float delta_V_ms = 0.0;
-float controlGain1 = 0.0;
-float controlGain2 = 0.0;
-float controlInput = 0.0;
-float airbrakeDeployment = 0.0;
+float tilt_deg = 0.0f;
+float delta_V_ms = 0.0f;
+float controlGain1 = 0.0f;
+float controlGain2 = 0.0f;
+float controlInput = 0.0f;
+float airbrakeDeployment = 0.0f;
 
 // Variables of the Flight State Machine
 enum class FlightState {
@@ -107,13 +111,13 @@ void setupKalman() {
           , 0, 1; // ZUKF velocity
 
     // Adjust process noise covariance Q_kf and measurement noise covariance R_kf
-    float var_proc_pos = 1.0; 
-    float var_proc_vel = 3.0;  
+    float var_proc_pos = 1.0f; 
+    float var_proc_vel = 3.0f;  
     Q_kf << var_proc_pos*(Ts*Ts*Ts*Ts)/4.0, var_proc_pos*(Ts*Ts*Ts)/2,
             var_proc_pos*(Ts*Ts*Ts)/2, var_proc_vel*Ts*Ts;
 
-    float var_med_alt = 1.0; // Standard variance for altitude measurement
-    float var_zupt_vel = 0.000001; // Very low variance for ZUPT velocity measurement
+    float var_med_alt = 1.0f; // Standard variance for altitude measurement
+    float var_zupt_vel = 0.000001f; // Very low variance for ZUPT velocity measurement
 
     R_kf << var_med_alt, 0,
             0, var_zupt_vel;  
@@ -128,12 +132,12 @@ void setupKalman() {
 }
 
 // PID gains (obtained through simulation) and Controller Initialization
-float Kp = 0.025;
-float Ki = 0.075;
-float Kd = 0.02;
+float Kp = 0.025f;
+float Ki = 0.075f;
+float Kd = 0.02f;
 
-float mass_kg = 30.605; // Rocket mass in kg
-float area_m2 = 0.02097; // Reference area of the control surface in m²
+float mass_kg = 30.605f; // Rocket mass in kg
+float area_m2 = 0.02097f; // Reference area of the control surface in m²
 Controller controller = Controller(Kp, Ki, Kd, mass_kg, area_m2, Ts);
 
 void setupController() {
@@ -144,9 +148,13 @@ void setupController() {
 // uint32_t kalmanTime = 0;
 // uint32_t attitudeTime = 0;
 
+bool motor_on;
 void fullStateEstimateUpdate() {
     // kalmanTime = millis();
     // attitudeTime = millis();
+
+    flightState == FlightState::MOTOR_ON ? motor_on = true : motor_on = false;
+
     if (HIL_MODE_ACTIVE) {
         // --- HIL Mode: Read data from CSV file ---
         hilData = DataManager::getInstance().readHILStep();
@@ -163,7 +171,6 @@ void fullStateEstimateUpdate() {
         // Data from HIL
         barometricPressure_Pa = hilData.barometricPressure_Pa;
         
-        // Lógica Adaptativa
         if (hilData.hasFullIMU) {
             float accX_g = hilData.accX_ms2 / G_GRAVITATIONAL_CONSTANT; 
             float accY_g = hilData.accY_ms2 / G_GRAVITATIONAL_CONSTANT;
@@ -176,15 +183,27 @@ void fullStateEstimateUpdate() {
             float magX_mG = hilData.magX_T * 1e7;
             float magY_mG = hilData.magY_T * 1e7;
             float magZ_mG = hilData.magZ_T * 1e7;
-            
-            if (!mpu.update(accX_g, accY_g, accZ_g, gyroX_degs, gyroY_degs, gyroZ_degs, magX_mG, magY_mG, magZ_mG, false)) {
-                DEBUG_PRINTLN_F("Failed to update simulated IMU data!");
-                return; 
+
+
+            if (HIL_MODE_Z_DOWN) {
+                if (!mpu.update(Ts, motor_on, false, accX_g, accY_g, -accZ_g, -gyroX_degs, -gyroY_degs, gyroZ_degs, magX_mG, -magY_mG, -magZ_mG)) {
+                        DEBUG_PRINTLN_F("Failed to update simulated IMU data!");
+                        return; 
+                    }
+                
+                
+                netVerticalAcceleration_ms2 = computeNetAcceleration(true, accX_g, accY_g, accZ_g, false);
+                tilt_deg = readCurrentTilt();
+            } else{
+                if (!mpu.update(Ts, motor_on, false, accX_g, accY_g, accZ_g, gyroX_degs, gyroY_degs, gyroZ_degs, magX_mG, magY_mG, magZ_mG)) {
+                        DEBUG_PRINTLN_F("Failed to update simulated IMU data!");
+                        return; 
+                    }
+                
+                
+                netVerticalAcceleration_ms2 = computeNetAcceleration(true, accX_g, accY_g, accZ_g, false);
+                tilt_deg = readCurrentTilt();
             }
-            
-            netVerticalAcceleration_ms2 = computeNetAcceleration();
-            tilt_deg = readCurrentTilt();
-            
 
         } else {
             // Modo Simples 
@@ -195,11 +214,12 @@ void fullStateEstimateUpdate() {
 
     } else {
         // --- Real Mode: Read data from sensors ---
-        if (!mpu.update()) {
+        if (!mpu.update(Ts, motor_on)) {
             DEBUG_PRINTLN_F("Failed to read IMU data!");
             return; 
         }
-        netVerticalAcceleration_ms2 = computeNetAcceleration();
+
+        netVerticalAcceleration_ms2 = computeNetAcceleration(false);
         // DEBUG_PRINT_F("Attitude time:");
         // DEBUG_PRINTLN(millis() - attitudeTime);
         barometricPressure_Pa = getPressaoBMPAtual(); 
@@ -246,20 +266,19 @@ void updateLogger(){
     flightData.magX = mpu.getMagX()/10.0;                               // Body frame x axis magnetic field [uT]
     flightData.magY = mpu.getMagY()/10.0;                               // Body frame y axis magnetic field [uT]
     flightData.magZ = mpu.getMagZ()/10.0;                               // Body frame z axis magnetic field [uT]
-    flightData.qW = mpu.getQuaternionW();                               // W quaternion component []
-    flightData.qX = mpu.getQuaternionX();                               // X quaternion component []
-    flightData.qY = mpu.getQuaternionY();                               // Y quaternion component []
-    flightData.qZ = mpu.getQuaternionZ();                               // Z quaternion component []
+    flightData.qW = mpu.getQuaternionW();                               // W quaternion component [-]
+    flightData.qX = mpu.getQuaternionX();                               // X quaternion component [-]
+    flightData.qY = mpu.getQuaternionY();                               // Y quaternion component [-]
+    flightData.qZ = mpu.getQuaternionZ();                               // Z quaternion component [-]
     flightData.filteredAltitude = filteredAltitude_m;                   // Inertial frame filtered altitude (z) [m]
     flightData.filteredVerticalVelocity = filteredVerticalVelocity_ms;  // Inertial frame filtered velocity (vz) [m/s]
     flightData.netVerticalAcceleration = netVerticalAcceleration_ms2;   // Inertial frame net acceleration (az) [m/s²]
     flightData.tilt = tilt_deg;                                         // Z axis tilt angle [°]
     flightData.barometricPressure = barometricPressure_Pa;              // Barometric pressure [Pa]
-    // flightData.barometricPressure =  getGroundPressureP0_BMP();      // For debugging
     flightData.airbrakeDeployment = airbrakeDeployment*100;             // Airbrake deployment [%]
     flightData.gain1 = controlGain1;                                    // PID gain [-]
     flightData.gain2 = controlGain2;                                    // Cd gain [-]
-    flightData.flightState = u_int8_t(flightState);                     // Flight state [-]
+    flightData.flightState = int(flightState);                          // Flight state [-]
 }
 
 // --- State Machine Functions ---
@@ -283,12 +302,12 @@ void healthCheckLoop() {
     fullStateEstimateUpdate();
     recalibrateGroundPressure(); 
 
-    if (checkFlightSystemHealth(filteredAltitude_m, filteredVerticalVelocity_ms)) { 
+    if (checkFlightSystemHealth(filteredAltitude_m, filteredVerticalVelocity_ms) || HIL_MODE_ACTIVE) { 
         healthCheckCount++;
         DEBUG_PRINT_F("Component health OK this iteration. Count: ");
         DEBUG_PRINTLN(healthCheckCount);
 
-        if (healthCheckCount >= REQ_HEALTH_CHECKS) {
+        if (healthCheckCount >= REQ_HEALTH_CHECKS || HIL_MODE_ACTIVE) {
             Serial.println("HEALTH CHECK: Consecutive checks OK. Transitioning...");
             signalSuccessfullModule("Health Check Complete"); 
 
@@ -298,7 +317,7 @@ void healthCheckLoop() {
             // System settings for wait-for-launch
             DataManager::getInstance().setDecimationFactor(10); // Saves every 10x20ms = 200ms
             setDriftLearning(true); // Enable drift learning on the IMU
-            setFilterBeta(30.0f); // Increase filter beta for faster response during wait
+            setFilterBeta(2.5f); // Increase filter beta for faster response during wait
             R_kf(1,1) = 0.000001f; // Reduce velocity measurement variance for ZUKF
 
             stateEntryTime = millis();         
@@ -310,26 +329,27 @@ void healthCheckLoop() {
         healthCheckCount = 0; // Reset count if any check fails   
     }
 }
-
+ 
+u_int8_t contador = 0;
 void waitLaunchLoop() {
-
+    contador ++;
     // Continuously update ground pressure reference to compensate drift
     recalibrateGroundPressure();
     fullStateEstimateUpdate();
     DataManager& logger = DataManager::getInstance();
+    if (contador > print_count){
+        DEBUG_PRINT_F("STATE: WAIT_LAUNCH | Alt: ");
+        DEBUG_PRINT(filteredAltitude_m);
+        DEBUG_PRINT_F("m | VelZ: ");
+        DEBUG_PRINT(filteredVerticalVelocity_ms);
+        DEBUG_PRINT_F("m/s | AccelZ: ");
+        DEBUG_PRINT(netVerticalAcceleration_ms2);
+        DEBUG_PRINT_F("m/s^2 | Tilt: ");
+        DEBUG_PRINT(tilt_deg);
+        DEBUG_PRINTLN_F("°");
+        contador = 0;
+    }
 
-    DEBUG_PRINT_F("STATE: WAIT_LAUNCH | Alt: ");
-    DEBUG_PRINT(filteredAltitude_m);
-    DEBUG_PRINT_F("m | VelZ: ");
-    DEBUG_PRINT(filteredVerticalVelocity_ms);
-    DEBUG_PRINT_F("m/s | AccelZ: ");
-    DEBUG_PRINT(netVerticalAcceleration_ms2);
-    DEBUG_PRINTLN_F("m/s^2");
-    // DEBUG_PRINT_F(",Alt:");
-    // DEBUG_PRINT(filteredAltitude_m);
-    // DEBUG_PRINT_F(",VelZ:");
-    // DEBUG_PRINTLN(filteredVerticalVelocity_ms);
-    
     if (logger.isLoggingActive()) {
         updateLogger();
         logger.logDataSD(flightData); 
@@ -340,7 +360,7 @@ void waitLaunchLoop() {
         
         // System settings for flight
         setDriftLearning(false); // Disable drift learning on IMU after launch
-        setFilterBeta(3.0f);
+        setFilterBeta(0.0f);
         R_kf(1,1) = 1000000000.0f; // Set high variance on velocity measurement to ignore zero input during flight
         logger.setDecimationFactor(1); // Save every 20ms during flight
 
@@ -351,11 +371,18 @@ void waitLaunchLoop() {
 }
 
 void motorOnLoop() {
-    DEBUG_PRINT_F("STATE: MOTOR_ON | Alt: ");
-    DEBUG_PRINT(filteredAltitude_m);
-    DEBUG_PRINT_F("m | VelZ: ");
-    DEBUG_PRINT(filteredVerticalVelocity_ms);
-    DEBUG_PRINTLN_F("m/s");
+    contador ++;
+    if (contador > print_count){
+        DEBUG_PRINT_F("STATE: MOTOR_ON | Alt: ");
+        DEBUG_PRINT(filteredAltitude_m);
+        DEBUG_PRINT_F("m | VelZ: ");
+        DEBUG_PRINT(filteredVerticalVelocity_ms);
+        DEBUG_PRINT_F("m/s | Tilt: ");
+        DEBUG_PRINT(tilt_deg);
+        DEBUG_PRINTLN_F("°");
+        contador = 0;
+    }
+
     DataManager& logger = DataManager::getInstance();
     fullStateEstimateUpdate();
 
@@ -367,6 +394,7 @@ void motorOnLoop() {
     unsigned long tempoDesdeLancamento = millis() - launchDetectedTime;
     if (detectBurnout(netVerticalAcceleration_ms2, tempoDesdeLancamento)) { 
         DEBUG_PRINTLN_F("BURNOUT DETECTED!");
+        setFilterBeta(0.5f);
         flightState = FlightState::BURNOUT; 
         stateEntryTime = millis();
     }
@@ -385,6 +413,7 @@ void loopBurnout() {
         updateLogger();
         logger.logDataSD(flightData); 
     }
+
     if (detectAirbrakesActuation(filteredAltitude_m, filteredVerticalVelocity_ms)) {
         DEBUG_PRINTLN_F("Appropriate speed detected, initiating airbrake actuation.");
         flightState = FlightState::AIRBRAKE_DEPLOYMENT;
@@ -393,14 +422,18 @@ void loopBurnout() {
 }
 
 void airbrakeDeploymentLoop() {
-    DEBUG_PRINT_F("STATE: AIRBRAKE_DEPLOYMENT | Alt: ");
-    DEBUG_PRINT(filteredAltitude_m);
-    DEBUG_PRINT_F("m | VelZ: ");
-    DEBUG_PRINT(filteredVerticalVelocity_ms);
-    DEBUG_PRINT_F("m/s | Tilt: ");
-    DEBUG_PRINT(tilt_deg);
-    DEBUG_PRINT_F("° | Computed Deflection: ");
-    DEBUG_PRINTLN(airbrakeDeployment);
+    contador ++;
+    if (contador > print_count){
+        DEBUG_PRINT_F("STATE: AIRBRAKE_DEPLOYMENT | Alt: ");
+        DEBUG_PRINT(filteredAltitude_m);
+        DEBUG_PRINT_F("m | VelZ: ");
+        DEBUG_PRINT(filteredVerticalVelocity_ms);
+        DEBUG_PRINT_F("m/s | Tilt: ");
+        DEBUG_PRINT(tilt_deg);
+        DEBUG_PRINT_F("° | Computed Deflection: ");
+        DEBUG_PRINTLN(airbrakeDeployment);
+        contador = 0;
+    }
     DataManager& logger = DataManager::getInstance();
 
     fullStateEstimateUpdate(); 
@@ -437,6 +470,7 @@ void airbrakeDeploymentLoop() {
      if (detectApogeeByRegression(filteredAltitude_m, millis())) { 
         DEBUG_PRINTLN_F("APOGEE DETECTED!");
         flightState = FlightState::APOGEE;
+        setFilterBeta(1.0);
         stateEntryTime = millis();
         apogeeDetectedTime = millis();
     }
@@ -464,13 +498,15 @@ void apogeeLoop() {
 
 void descentLoop() {
 
-    // if (HIL_MODE_ACTIVE == false) {
+    contador ++;
+    if (contador > print_count){
         DEBUG_PRINT_F("STATE: DESCENT | Alt: ");
         DEBUG_PRINT(filteredAltitude_m);
         DEBUG_PRINT_F("m | VelZ: ");
         DEBUG_PRINT(filteredVerticalVelocity_ms);
         DEBUG_PRINTLN_F("m/s");
-    // }
+        contador = 0;
+    }
  
 
     fullStateEstimateUpdate();
@@ -519,6 +555,13 @@ void setup() {
     unsigned long serialStartTime = millis();
     while (!Serial && (millis() - serialStartTime < 4000));
 
+    // // Turn off WIFI 
+    // WiFi.disconnect(true);
+    // WiFi.mode(WIFI_OFF);
+
+    // // Turn off Bluetooth
+    // esp_bt_controller_disable();
+    // esp_bt_controller_deinit();
     
     if (!EEPROM.begin(EEPROM_SIZE)) {
         DEBUG_PRINTLN_F("CRITICAL ERROR: Failed to initialize EEPROM!");
@@ -530,7 +573,6 @@ void setup() {
     Wire.begin();
     Wire.setClock(400000); // Set I2C to 400kHz - test different values if necessary ---> wire length influences
     
-    // SPI.begin();
     setupSinalizacao();
     signalStartupStart();
 
@@ -547,6 +589,14 @@ void setup() {
         buzzerBeeps(10,300,150, 1200);
     } else {
         signalSuccessfullModule("Log SD Card Setup");
+    }
+
+    if (!setup_IMU(calibrate_imu_on_startup, perform_fine_tuning, print_imu_params)) {
+        signalFailedModule("IMU");
+        DEBUG_PRINTLN_F("FATAL ERROR: IMU setup failed. System halted.");
+        while (1) { ledBlink(PIN_LED_STATUS_2, 1, 500, 500); delay(100); }
+    } else {
+        signalSuccessfullModule("IMU");
     }
 
     // Sensors or HIL setup
@@ -573,23 +623,12 @@ void setup() {
             }
             
             signalSuccessfullModule("HIL Init");
-            
         } else {
             DEBUG_PRINTLN_F("HIL FATAL ERROR: File not found!");
             while(1);
         }
 
     } else {
-
-        DEBUG_PRINTLN_F("**** REAL FLIGHT MODE ACTIVATED ****");
-        if (!setup_IMU(calibrate_imu_on_startup, perform_fine_tuning, print_imu_params)) {
-            signalFailedModule("IMU");
-            DEBUG_PRINTLN_F("FATAL ERROR: IMU setup failed. System halted.");
-            while (1) { ledBlink(PIN_LED_STATUS_2, 1, 500, 500); delay(100); }
-        } else {
-            signalSuccessfullModule("IMU");
-        }
-
         DEBUG_PRINTLN_F("Initializing BMP (setup_BMP)...");
         if (!setupBMP()) { 
             signalFailedModule("BMP280");
@@ -598,7 +637,8 @@ void setup() {
         } else {
             signalSuccessfullModule("BMP280");
         }
-    }
+        DEBUG_PRINTLN_F("**** REAL FLIGHT MODE ACTIVATED ****");
+        }
      
     if (setupServo()) { 
         signalSuccessfullModule("Servo");
@@ -693,9 +733,9 @@ void loop() {
         // Serial.println(" ms to execute!");
 
         if (millis() > previousLoopTime + Ts_ms) { 
-            DEBUG_PRINT_F("WARNING: Main loop overrun! Execution time: ");
-            DEBUG_PRINT(millis() - previousLoopTime);
-            DEBUG_PRINTLN_F(" ms!");
+            Serial.print("WARNING: Main loop overrun! Execution time: ");
+            Serial.print(millis() - previousLoopTime);
+            Serial.println(" ms!");
         }
     }
     if (serialCommActive){

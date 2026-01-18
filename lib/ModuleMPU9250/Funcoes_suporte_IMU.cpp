@@ -12,7 +12,7 @@ MPU9250Setting mpuConfig;
 
 const float ACCEL_CALIB_SENSITIVITY_FS = 16384.0f; // LSB/g ( Range for calib = +/-2g)
 const float GYRO_CALIB_SENSITIVITY_FS  = 131.0f;   // LSB/(deg/s) ( Range for calib = +/-250dps)
-const bool z_axis_up = true; // Defines the orientation of the IMU Z axis
+const bool z_axis_down = true; // Defines the orientation of the IMU Z axis
 
 /**
  * @brief Saves the IMU calibration parameters to EEPROM.
@@ -48,19 +48,19 @@ void saveCalibration(bool print) {
  * @details Writes zeros to the memory to force a new calibration on next initialization.
  **/
 void eraseCalibration() {
-  float empty_data[3] = {NAN, NAN, NAN};  // Uses NAN to indicate no calibration
+    float empty_data[3] = {NAN, NAN, NAN};  // Uses NAN to indicate no calibration
 
-  EEPROM.put(0, empty_data);  // Deletes accel_bias
-  EEPROM.put(sizeof(empty_data), empty_data);  // Deletes gyro_bias
-  EEPROM.put(sizeof(empty_data) * 2, empty_data);  // Deletes mag_bias
-  EEPROM.put(sizeof(empty_data) * 3, empty_data);  // Deletes mag_scale
+    EEPROM.put(0, empty_data);  // Deletes accel_bias
+    EEPROM.put(sizeof(empty_data), empty_data);  // Deletes gyro_bias
+    EEPROM.put(sizeof(empty_data) * 2, empty_data);  // Deletes mag_bias
+    EEPROM.put(sizeof(empty_data) * 3, empty_data);  // Deletes mag_scale
 
 
-  if (EEPROM.commit()) {
-      DEBUG_PRINTLN("Calibration erased from EEPROM.");
-  } else {
-      DEBUG_PRINTLN("ERROR: Failed to erase EEPROM!");
-  }
+    if (EEPROM.commit()) {
+        DEBUG_PRINTLN("Calibration erased from EEPROM.");
+    } else {
+        DEBUG_PRINTLN("ERROR: Failed to erase EEPROM!");
+    }
 }
 
 /**
@@ -148,6 +148,24 @@ void write_byte_local(uint8_t address, uint8_t subAddress, uint8_t data) {
      Wire.endTransmission();
 }
 
+uint8_t read_byte_local(uint8_t address, uint8_t subAddress) {
+    uint8_t data = 0;
+    
+    // Step 1: Tell the MPU which register you want to read
+    Wire.beginTransmission(address);
+    Wire.write(subAddress);
+    Wire.endTransmission(false); // Send a restart, keeping the connection alive
+
+    // Step 2: Request 1 byte from the device
+    Wire.requestFrom(address, (uint8_t)1);
+    
+    if (Wire.available()) {
+        data = Wire.read();
+    }
+    
+    return data;
+}
+
 /**
  * @brief Collects IMU data to compute bias errors.
  * @param samples Number of samples to collect.
@@ -197,7 +215,7 @@ void test_bias_for_adjust(int samples, float result_accel_g[3], float result_gyr
             gyro_sum[2] += mpu.getGyroZ(); // Unit: 'dps'
             
             // Gravity compensation on Z axis
-            if (z_axis_up) {
+            if (z_axis_down) {
                 accel_sum[2] -= 1.0f; 
             } else {
                 accel_sum[2] += 1.0f; 
@@ -243,7 +261,7 @@ bool adjustCalibrationIteratively(int samples_per_iteration, bool print_debug, f
 
     // Change MPU configuration to high sensitivity for fine-tuning
     MPU9250Setting calibFineTuneConfig;
-    calibFineTuneConfig.accel_fs_sel = ACCEL_FS_SEL::A2G;
+    calibFineTuneConfig.accel_fs_sel = ACCEL_FS_SEL::A16G;
     calibFineTuneConfig.gyro_fs_sel = GYRO_FS_SEL::G250DPS;
     // Keep other settings from main configuration
     calibFineTuneConfig.fifo_sample_rate = mpuConfig.fifo_sample_rate;
@@ -334,7 +352,7 @@ void calibration_IMU(bool print_debug, bool perform_fine_tuning) {
     DEBUG_PRINTLN_F("Calibrating Accel/Gyro (MPU9250 lib)... Keep still and level.");
     if(print_debug) mpu.verbose(true);
     delay(2000);
-    mpu.calibrateAccelGyro(); 
+    mpu.calibrateAccelGyro(z_axis_down); 
 
     DEBUG_PRINTLN_F("Calibrating Magnetometer (MPU9250 lib)... Move in a figure-eight pattern.");
     delay(2000);
@@ -378,7 +396,7 @@ bool setup_IMU(bool calibrate_if_needed, bool perform_fine_tuning_on_calib, bool
     mpuConfig.accel_dlpf_cfg = ACCEL_DLPF_CFG::DLPF_45HZ;
     // Configure magnetic declination (examples: Sp:-21.46, Pira:-21.47, Midland: 5.32, Munchen: 4.27)
     // CHANGE FOR COMPETITION if needed
-    mpu.setMagneticDeclination(4.27); // Adjust according to your actual launch location
+    mpu.setMagneticDeclination(4.6); // Adjust according to your actual launch location
 
     // Apply the initial flight configuration
     if (!mpu.setup(0x68, mpuConfig)) { 
@@ -411,18 +429,18 @@ bool setup_IMU(bool calibrate_if_needed, bool perform_fine_tuning_on_calib, bool
         return false;
     }
     loadCalibration(print_params); // Load latest biases from EEPROM and apply to the mpu object
-
+    reset_orientation(z_axis_down);
     DEBUG_PRINTLN_F("SETUP_IMU: Completed successfully and ready for flight.");
     return true;
 }
 
 /**
  * @brief Resets the orientation (Quaternions) to default.
- * * @param z_axis_up If true, considers the sensor's Z-axis pointing upwards.
+ * * @param z_axis_down If true, considers the sensor's Z-axis pointing downwards.
  * Useful if the filter diverges significantly before launch.
  */
-void reset_orientation(bool z_axis_up){
-    mpu.resetOrientation(z_axis_up);
+void reset_orientation(bool z_axis_down){
+    mpu.resetOrientation(z_axis_down);
 }
 
 /**
@@ -457,7 +475,7 @@ void print_roll_pitch_yaw() {
  * @brief Calculates the rocket's tilt relative to the vertical.
  * * @details Uses Quaternions to calculate the angle between the body's Z-axis 
  * and the gravity vector. Essential for safety (e.g., preventing airbrake deployment if tilted).
- * * @note 0° = Body Z-axis aligned with World Z (up or down, depending on z_axis_up).
+ * * @note 0° = Body Z-axis aligned with World Z (up or down, depending on z_axis_down).
  * 90° = Rocket is horizontal.
  * @return float Tilt angle in degrees [0° to 180°].
  */
@@ -480,7 +498,7 @@ float calcTilt() {
 
     float tilt_deg = tilt_rad * RAD_TO_DEG;
 
-    if (!z_axis_up){
+    if (!z_axis_down){
         tilt_deg = (180.0f - tilt_deg);
     }
     
@@ -499,19 +517,44 @@ float calcTilt() {
  * Positive = Ascending (accelerating upwards).
  * Zero = Stationary or constant velocity.
  */
-float computeNetAcceleration() {
+float computeNetAcceleration(bool print_debug, float ax_input, float ay_input, float az_input, bool autoUpdate) {
 
     // Access quaternion values from the mpu object
     float qx = mpu.getQuaternionX();
     float qy = mpu.getQuaternionY();
     float qz = mpu.getQuaternionZ();
     float qw = mpu.getQuaternionW();
+
+    
   
     // Raw accelerometer data in 'g'
-    float ax_g = mpu.getAccX(); 
-    float ay_g = -mpu.getAccY(); 
-    float az_g = -mpu.getAccZ();
+    float ax_g, ay_g, az_g;
 
+    if (!autoUpdate) {
+        ax_g = ax_input;      ay_g = ay_input;      az_g = az_input;
+    } else {
+        ax_g = mpu.getAccX(); ay_g = mpu.getAccY(); az_g = mpu.getAccZ();
+    }
+
+   
+
+    if (print_debug){
+        Serial.print("qx: ");
+        Serial.print(qx);
+        Serial.print(" | qy: ");
+        Serial.print(qy);
+        Serial.print(" | qz: ");
+        Serial.print(qz);
+        Serial.print(" | qw: ");
+        Serial.print(qw);
+        Serial.print(" | ax_body: ");
+        Serial.print(ax_g);
+        Serial.print(" | ay_body: ");
+        Serial.print(ay_g);
+        Serial.print(" | az_body: ");
+        Serial.println(az_g);
+    }
+    
     // Rotate the specific force vector (measured acceleration) from the body
     // frame into the Earth frame (NED) and extract the Z (down) component.
     // Third row components of the body-to-world rotation matrix (R_bw) for NED:
@@ -534,10 +577,13 @@ float computeNetAcceleration() {
         (1.0f - 2.0f * (qx2 + qy2)) * az_g;
 
     // Remove gravity and convert to m/s^2
-    float netVerticalAcceleration_ms2 = -(worldZAcceleration + 1.0f) * G_GRAVITATIONAL_CONSTANT;
-    // DEBUG_PRINT_F("| U_FINAL(m/s^2):"); 
-    // DEBUG_PRINTLN(netVerticalAcceleration_ms2, 4);
+    float netVerticalAcceleration_ms2 = -(worldZAcceleration - 1.0f) * G_GRAVITATIONAL_CONSTANT;
     
+    // Remove small vibrations
+    if (abs(netVerticalAcceleration_ms2) < 0.2f) { 
+        netVerticalAcceleration_ms2 = 0.0f;
+    }
+
     return netVerticalAcceleration_ms2;
 }
 
