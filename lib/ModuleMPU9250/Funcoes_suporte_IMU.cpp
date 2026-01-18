@@ -12,7 +12,7 @@ MPU9250Setting mpuConfig;
 
 const float ACCEL_CALIB_SENSITIVITY_FS = 16384.0f; // LSB/g ( Range for calib = +/-2g)
 const float GYRO_CALIB_SENSITIVITY_FS  = 131.0f;   // LSB/(deg/s) ( Range for calib = +/-250dps)
-const bool z_axis_down = true; // Defines the orientation of the IMU Z axis
+const bool z_axis_down = false; // Defines the orientation of the IMU Z axis
 
 /**
  * @brief Saves the IMU calibration parameters to EEPROM.

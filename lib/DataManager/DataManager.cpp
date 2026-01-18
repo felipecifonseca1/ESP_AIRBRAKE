@@ -332,7 +332,7 @@ bool DataManager::initHIL(const char* filename) {
             
             DEBUG_PRINT_F("HIL: Initialized. Entering stabilization period: ");
             DEBUG_PRINT(_hilStabilizationDurationMS);
-            DEBUG_PRINTLN_F("s.");
+            DEBUG_PRINTLN_F("ms.");
             return true;
 
         } else {

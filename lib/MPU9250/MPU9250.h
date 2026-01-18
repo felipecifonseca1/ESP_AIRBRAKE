@@ -234,9 +234,6 @@ public:
             m[0] = mx; m[1] = my; m[2] = mz;
         }
 
-        if (ignore_acc){
-            a[0] = 0; a[1] = 0; a[2] = 0;
-        }
         // Madgwick function needs to be fed North, East, and Down direction like
         // (AN, AE, AD, GN, GE, GD, MN, ME, MD)
         // Accel and Gyro direction is Right-Hand, X-Forward, Z-Up
@@ -261,9 +258,16 @@ public:
         float me = -m[0];
         float md = +m[2];
 
-        for (size_t i = 0; i < n_filter_iter; ++i) {
-            quat_filter.update(dt, an, ae, ad, gn, ge, gd, mn, me, md, q);
+        if (!ignore_acc){
+            for (size_t i = 0; i < n_filter_iter; ++i) {
+                quat_filter.update(dt, an, ae, ad, gn, ge, gd, mn, me, md, q);
+            }
+        } else{
+            for (size_t i = 0; i < n_filter_iter; ++i) {
+                quat_filter.update(dt, 0.0f, 0.0f, 0.0f, gn, ge, gd, mn, me, md, q);
+            }
         }
+        
 
         if (!b_ahrs) {
             temperature_count = read_temperature_data();               // Read the adc values

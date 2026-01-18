@@ -2,7 +2,7 @@
 #define SINALIZACAO_H
 
 #include <Arduino.h> 
-// --- Constantes dos Pinos ---
+// --- Pins ---
 const u_int8_t PIN_BUZZER = 14;
 const u_int8_t PIN_LED_STATUS_1 = 12; // Ex: LED 1
 const u_int8_t PIN_LED_STATUS_2 = 4; // Ex: LED 2
