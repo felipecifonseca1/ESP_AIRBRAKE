@@ -48,11 +48,19 @@ bool DataManager::setupSD() {
 
     if (_logFile) {
         // CSV Header
-
         _logFile.println("Time[ms],AccX[g],AccY[g],AccZ[g],GyroX[°/s],GyroY[°/s],GyroZ[°/s],MagX[uT],MagY[uT],MagZ[uT],qW,qX,qY,qZ,AltFilt[m],VelFilt[m/s],AccVert[m/s^2],Tilt[°],PressBMP[Pa],Servo[%],PID_Gain,Cd_Gain,Estado");
-        _logFile.flush();
+        
+        // If interval is small (e.g. 1), we close it immediately to be safe.
+        // If interval is larger, we can leave it open for speed.
+        if (LOG_SYNC_INTERVAL <= 1) {
+            _logFile.close();
+            DEBUG_PRINTLN_F("SD: File created and closed (Safe Mode).");
+        } else {
+            _logFile.flush();
+            DEBUG_PRINTLN_F("SD: File open (Batch Mode).");
+        }
+        
         _sdAvailable = true;
-        DEBUG_PRINTLN_F("SD: Ready.");
         return true;
     }
 
@@ -132,7 +140,10 @@ void DataManager::closeSDCard() {
  * @param data A RawFlightData struct containing the flight data to be logged.
  **/
 void DataManager::logDataSD(const RawFlightData& data) {
-    if (!_sdAvailable || !_logFile || !_loggingActive) return;
+    if (!_sdAvailable || !_loggingActive) return;
+
+    // Safety check: Logic handles opening if closed
+    // if (!CLOSE_LOG_FILE_AFTER_EACH_WRITE && !_logFile) return;
    
     _decimationCounter++;
 
@@ -141,6 +152,15 @@ void DataManager::logDataSD(const RawFlightData& data) {
     }
 
     _decimationCounter = 0; // Reset and save now
+    
+    // Ensure file is open
+    if (!_logFile) {
+        _logFile = SD.open(_currentSDFileName, FILE_APPEND);
+        if (!_logFile) {
+            DEBUG_PRINTLN_F("SD: Error opening file!");
+            return;
+        }
+    }
 
     _logFile.printf("%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%.2f,%.1f,%d,%.2f,%.2f,%d\n",
         data.timestamp, data.accX, data.accY, data.accZ, 
@@ -149,12 +169,10 @@ void DataManager::logDataSD(const RawFlightData& data) {
         data.netVerticalAcceleration, data.tilt, data.barometricPressure, 
         data.airbrakeDeployment, data.gain1, data.gain2, data.flightState);
 
-    // Periodic flush to prevent data loss on crash
     _sdRecordCounter++;
-    if (_sdRecordCounter >= _sdFlushLimit) {
-        esp_task_wdt_reset(); // Reset Watchdog before the flush to prevent timeout
-        _logFile.flush();
-        DEBUG_PRINTLN_F("SD: Dados salvos."); 
+    if (_sdRecordCounter >= LOG_SYNC_INTERVAL) {
+        _logFile.close();
+        DEBUG_PRINTLN_F("SD: Data saved."); 
         _sdRecordCounter = 0;
     }
 }
@@ -669,7 +687,9 @@ void DataManager::receiveHILFile(const char* HILFileName) {
 }
 
 
-void DataManager::runFrequencyTest(uint32_t freq, u_int16_t flushLimit,u_int16_t numberOfRecords, bool onlyPrintf) {
+
+
+void DataManager::runFrequencyTest(uint32_t freq, u_int16_t flushLimit, u_int16_t numberOfRecords, bool onlyPrintf) {
     RawFlightData data = {123456, 1.1, -2.2, 9.8, 0.1, 0.2, 0.3, 15.0, 20.0, 25.0, 1.0, 0.0, 0.0, 0.0, 100.5, 50.2, 1.5, 5.0, 101325.0, 45, 0.02, 0.07, 2};
     Serial.println("\n=======================================");
     Serial.printf("STABILITY TEST AT %d MHz\n", freq / 1000000);
@@ -720,12 +740,87 @@ void DataManager::runFrequencyTest(uint32_t freq, u_int16_t flushLimit,u_int16_t
         Serial.printf("Avg Flush: %.3f ms\n", (totalFlushUs / (float)flushCount) / 1000.0);
         Serial.printf("Worst Case (Write+Flush): %.3f ms\n", ((totalWriteUs / float(numberOfRecords)) + (totalFlushUs / (float)flushCount)) / 1000.0);
     };
+    
     if (onlyPrintf) {
         benchmark(true, "/test_printf.csv");
-        SD.end();
+    } else {
+        benchmark(false, "/test1.csv");
+        benchmark(true, "/test2.csv");
+    }
+    SD.end();
+}
+
+void DataManager::runStrategyBenchmark(uint32_t freq, u_int16_t numberOfRecords) {
+    RawFlightData data = {123456, 1.1, -2.2, 9.8, 0.1, 0.2, 0.3, 15.0, 20.0, 25.0, 1.0, 0.0, 0.0, 0.0, 100.5, 50.2, 1.5, 5.0, 101325.0, 45, 0.02, 0.07, 2};
+    Serial.println("\n=======================================");
+    Serial.printf("LOGGING STRATEGY BENCHMARK (%d Records)\n", numberOfRecords);
+    
+    if (!SD.begin(_pinCS_SD, SPI, freq)) {
+        Serial.println("SD Initialization Failed!");
         return;
     }
-    benchmark(false, "/test1.csv");
-    benchmark(true, "/test2.csv");
+
+    auto runScenario = [&](const char* name, int flushInterval, int closeInterval) -> float {
+        char filename[32];
+        snprintf(filename, 32, "/bench_%d_%d.csv", flushInterval, closeInterval);
+        
+        uint32_t totalTimeUs = 0;
+        File file; // Keep scope if needed
+        bool fileIsOpen = false;
+
+        // Ensure clean start
+        if (SD.exists(filename)) SD.remove(filename);
+
+        if (closeInterval == 0) {
+             file = SD.open(filename, FILE_WRITE);
+             fileIsOpen = true;
+        }
+
+        for (int i = 1; i <= numberOfRecords; i++) {
+            uint32_t start = micros();
+
+            if (!fileIsOpen) {
+                file = SD.open(filename, FILE_APPEND);
+                fileIsOpen = true;
+            }
+
+            file.printf("%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%.2f,%.1f,%d,%.2f,%.2f,%d\n",
+                    data.timestamp, data.accX, data.accY, data.accZ, data.gyroX, data.gyroY, data.gyroZ, data.magX, data.magY, data.magZ,
+                    data.qW, data.qX, data.qY, data.qZ, data.filteredAltitude, data.filteredVerticalVelocity, data.netVerticalAcceleration,
+                    data.tilt, data.barometricPressure, data.airbrakeDeployment, data.gain1, data.gain2, data.flightState);
+
+            if (flushInterval > 0 && (i % flushInterval == 0)) {
+                file.flush();
+            }
+            if (closeInterval > 0 && (i % closeInterval == 0)) {
+                file.close();
+                fileIsOpen = false;
+            }
+
+            totalTimeUs += (micros() - start);
+        }
+
+        if (fileIsOpen) file.close();
+        SD.remove(filename);
+
+        float avgTime = (totalTimeUs / (float)numberOfRecords) / 1000.0f;
+        Serial.printf("%-25s | Flush: %-3d  | Close: %-3d  | Avg: %.3f ms\n", name, flushInterval, closeInterval, avgTime);
+        return avgTime;
+    };
+
+    Serial.println("\nStrategy                  | Settings    | Action      | Result");
+    Serial.println("--------------------------|-------------|-------------|-----------");
+
+    runScenario("50 flush (default)", 50, 0);
+    runScenario("25 flush", 25, 0);
+    runScenario("10 flush", 10, 0);
+    runScenario("5 flush", 5, 0);
+    runScenario("1 flush", 1, 0);
+    runScenario("50 close", 0, 50);
+    runScenario("25 close", 0, 25);
+    runScenario("10 close", 0, 10);
+    runScenario("5 close", 0, 5);
+    runScenario("1 close", 0, 1);
+    Serial.println("------------------------------------------------------------------");
     SD.end();
 }

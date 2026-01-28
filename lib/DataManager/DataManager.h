@@ -109,7 +109,8 @@ public:
     void dumpCurrentLog();
     void clearAllLogs();
     void receiveHILFile(const char* HILFileName);
-    void runFrequencyTest(uint32_t freq, u_int16_t flushLimit,u_int16_t numberOfRecords, bool onlyPrintf = true);
+    void runFrequencyTest(uint32_t freq, u_int16_t flushLimit, u_int16_t numberOfRecords, bool onlyPrintf = true);
+    void runStrategyBenchmark(uint32_t freq, u_int16_t numberOfRecords);
 
     // --- State getters ---
 
@@ -160,7 +161,7 @@ private:
     // Stabilization variables
     bool _hilStabilizing;             // Flag to indicate stabilization state
     unsigned long _hilStartTimeMS;   
-    const unsigned long _hilStabilizationDurationMS = 20000; // Stabilization time 5s
+    const unsigned long _hilStabilizationDurationMS = 20000; // Stabilization time 20s
     HILSimulationData _staticHILFrame; // Data from the first line
    
     // Helpers

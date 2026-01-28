@@ -1,506 +1,46 @@
 /**
  * @file main.cpp
  * @brief Main flight software for ESP32 Airbrake System.
- * @details Integrates IMU, Barometer, Kalman Filter, PID Control, and Data Logging.
+ * @details Integrates IMU, Barometer, Kalman Filter, PID Control, and Data
+ * Logging.
  ** @author Felipe Fonseca
  */
 
 #include <Arduino.h>
-#include <Wire.h>
-#include <SPI.h>
-#include <ESP32Servo.h>
 #include <EEPROM.h>
+#include <ESP32Servo.h>
+#include <SPI.h>
+#include <Wire.h>
+#include <cstdint>
 #include <esp_task_wdt.h>
 #include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
 #include <freertos/queue.h>
+#include <freertos/task.h>
+
 // #include <WiFi.h>
 // #include <esp_bt.h>
 
 // Modules
-#include "Funcoes_suporte_IMU.h" 
-#include "Funcoes_BMP.h"         
-#include "Logica_voo.h"           
+#include "FlightController.h"
+#include "Funcoes_BMP.h"
+#include "Funcoes_suporte_IMU.h"
 #include "KalmanFilter.hh"
-#include "Controller.hh"
-#include "AltitudeSpeedTable.hh"
-#include "DragCoefficientTable.hh"
-#include <ArduinoEigenDense.h>  
-#include "Sinalizacao.h"
+
 #include "Config_voo.h"
 #include "DataManager.h"
+#include "Sinalizacao.h"
+#include <ArduinoEigenDense.h>
 #define EEPROM_SIZE 256 // Define EEPROM size
 
-// --- Global Variables ---
-bool calibrate_imu_on_startup = false;                     // Calibrate IMU on startup
-bool print_imu_params = false;                            // Print IMU parameters after calibration
-bool perform_fine_tuning = false;                         // Fine tuning flag for IMU
-const float Ts_ms = 20.0f;                                 // Loop time in ms (50Hz)
-const float Ts = Ts_ms / 1000.0f;                         // Loop time in seconds
-uint32_t previousLoopTime = 0;                            // Stores previous loop time
-const uint32_t MAX_WAIT_TIME_LANDING = 600000;            // 10 minutes max wait time for landing 
-const uint32_t LANDING_TIMEOUT = 120000;                  // 2 minutes safety timeout after landing detection
-bool serialCommActive = true;                             // Serial communication flag
-const float G_GRAVITATIONAL_CONSTANT = 9.80665f;          // Gravity acceleration in m/s^2
-u_int8_t print_count = 5; 
-const int WDT_TIMEOUT_MS = 15000;                          // Watchdog timeout in milliseconds
-
+uint32_t WDT_TIMEOUT_MS = 15000; // Watchdog timeout in milliseconds
 // Watchdog configuration
-esp_task_wdt_config_t twdt_config = {
-    .timeout_ms = WDT_TIMEOUT_MS, 
-    .idle_core_mask = (1 << 0), 
-    .trigger_panic = true
-}; 
+esp_task_wdt_config_t twdt_config = {.timeout_ms = WDT_TIMEOUT_MS,
+                                     .idle_core_mask = (1 << 0),
+                                     .trigger_panic = true};
 
 // Flight State & Data
-RawFlightData flightData; 
-HILSimulationData hilData;
-
-// --- Flight Mode Flags ---
-const bool HIL_MODE_ACTIVE =  true; // true - HIL mode | false - Flight mode
-const char* HIL_FILENAME = "/Teste_HIL_Sensors_no_bias.csv";
-const bool HIL_MODE_Z_DOWN = false; // true - Z axis down | false - Z axis up
-
-// Matrices and Kalman Filter Initialization
-Eigen::Matrix<float, 2, 2> F_kf;
-Eigen::Matrix<float, 2, 1> G_kf;
-Eigen::Matrix<float, 2, 2> H_kf;
-Eigen::Matrix<float, 2, 2> Q_kf;
-Eigen::Matrix<float, 2, 2> R_kf;
-Eigen::Matrix<float, 2, 2> P0_kf;
-Eigen::Matrix<float, 2, 1> X0_kf;
-KalmanFilter kf;
-
-// Variables to store flight parameters
-float filteredAltitude_m = 0.0f;
-float filteredVerticalVelocity_ms = 0.0f;
-float netVerticalAcceleration_ms2 = 0.0f; 
-float barometricPressure_Pa = 0.0f;
-float tilt_deg = 0.0f;
-float delta_V_ms = 0.0f;
-float controlGain1 = 0.0f;
-float controlGain2 = 0.0f;
-float controlInput = 0.0f;
-float airbrakeDeployment = 0.0f;
-
-// Variables of the Flight State Machine
-enum class FlightState {
-    SENSOR_CALIBRATION,
-    HEALTH_CHECK,
-    WAIT_LAUNCH,
-    MOTOR_ON,
-    BURNOUT,
-    AIRBRAKE_DEPLOYMENT, 
-    APOGEE,
-    DESCENT,
-    LANDING
-};
-
-FlightState flightState = FlightState::SENSOR_CALIBRATION;
-uint32_t stateEntryTime = 0;
-uint32_t launchDetectedTime = 0; 
-uint32_t apogeeDetectedTime = 0;
-
-// ---  Kalman Filter Setup ---
-void setupKalman() {
-    
-
-    F_kf << 1.0f, Ts,
-            0.0f, 1.0f;
-
-    G_kf << 0.5 * Ts * Ts,
-            Ts;
-
-    H_kf << 1, 0
-          , 0, 1; // ZUKF velocity
-
-    // Adjust process noise covariance Q_kf and measurement noise covariance R_kf
-    float var_proc_pos = 1.0f; 
-    float var_proc_vel = 3.0f;  
-    Q_kf << var_proc_pos*(Ts*Ts*Ts*Ts)/4.0, var_proc_pos*(Ts*Ts*Ts)/2,
-            var_proc_pos*(Ts*Ts*Ts)/2, var_proc_vel*Ts*Ts;
-
-    float var_med_alt = 1.0f; // Standard variance for altitude measurement
-    float var_zupt_vel = 0.000001f; // Very low variance for ZUPT velocity measurement
-
-    R_kf << var_med_alt, 0,
-            0, var_zupt_vel;  
-
-    P0_kf << 1, 0,  // Altitude uncertainty
-             0, 1;  // Velocity uncertainty
-
-    X0_kf << 0, 0; // AGL altitude and vertical speed initial estimates
-
-    kf.init(F_kf, G_kf, H_kf, Q_kf, R_kf, P0_kf, X0_kf);
-    DEBUG_PRINTLN_F("Kalman filter initialized.");
-}
-
-// PID gains (obtained through simulation) and Controller Initialization
-float Kp = 0.025f;
-float Ki = 0.075f;
-float Kd = 0.02f;
-
-float mass_kg = 30.605f; // Rocket mass in kg
-float area_m2 = 0.02097f; // Reference area of the control surface in m²
-Controller controller = Controller(Kp, Ki, Kd, mass_kg, area_m2, Ts);
-
-void setupController() {
-    controller.setLimits(0, 1);
-    DEBUG_PRINTLN_F("Controller initialized.");
-}
-
-// uint32_t kalmanTime = 0;
-// uint32_t attitudeTime = 0;
-
-bool motor_on;
-void fullStateEstimateUpdate() {
-    // kalmanTime = millis();
-    // attitudeTime = millis();
-
-    flightState == FlightState::MOTOR_ON ? motor_on = true : motor_on = false;
-
-    if (HIL_MODE_ACTIVE) {
-        // --- HIL Mode: Read data from CSV file ---
-        hilData = DataManager::getInstance().readHILStep();
-        
-        if (!hilData.valid) {
-            // End of HIL simulation
-            if (DataManager::getInstance().isLoggingActive()) {
-                DataManager::getInstance().stopLogging();
-                Serial.println("End of HIL simulation. Logging stopped.");
-            }
-            return; 
-        }
-
-        // Data from HIL
-        barometricPressure_Pa = hilData.barometricPressure_Pa;
-        
-        if (hilData.hasFullIMU) {
-            float accX_g = hilData.accX_ms2 / G_GRAVITATIONAL_CONSTANT; 
-            float accY_g = hilData.accY_ms2 / G_GRAVITATIONAL_CONSTANT;
-            float accZ_g = hilData.accZ_ms2 / G_GRAVITATIONAL_CONSTANT;
-            
-            float gyroX_degs = hilData.gyroX_rads * RAD_TO_DEG;
-            float gyroY_degs = hilData.gyroY_rads * RAD_TO_DEG;
-            float gyroZ_degs = hilData.gyroZ_rads * RAD_TO_DEG;
-
-            float magX_mG = hilData.magX_T * 1e7;
-            float magY_mG = hilData.magY_T * 1e7;
-            float magZ_mG = hilData.magZ_T * 1e7;
-
-
-            if (HIL_MODE_Z_DOWN) {
-                if (!mpu.update(Ts, motor_on, false, accX_g, accY_g, -accZ_g, -gyroX_degs, -gyroY_degs, gyroZ_degs, magX_mG, -magY_mG, -magZ_mG)) {
-                        DEBUG_PRINTLN_F("Failed to update simulated IMU data!");
-                        return; 
-                    }
-                 
-                netVerticalAcceleration_ms2 = computeNetAcceleration(false, accX_g, accY_g, -accZ_g, false);
-                tilt_deg = readCurrentTilt();
-            } else{
-                if (!mpu.update(Ts, motor_on, false, -accX_g, accY_g, accZ_g, gyroX_degs, -gyroY_degs, -gyroZ_degs, -magX_mG, -magY_mG, magZ_mG)) {
-                        DEBUG_PRINTLN_F("Failed to update simulated IMU data!");
-                        return; 
-                    }
-                
-                netVerticalAcceleration_ms2 = computeNetAcceleration(true, -accX_g, accY_g, accZ_g, false);
-                tilt_deg = readCurrentTilt();
-            }
-
-        } else {
-            // Simple HIL mode
-            netVerticalAcceleration_ms2 = hilData.netVerticalAcceleration_ms2;
-            tilt_deg = 90 - hilData.tilt; // Convert tilt to match system definition
-        }
-        
-
-    } else {
-        // --- Real Mode: Read data from sensors ---
-        if (!mpu.update(Ts, motor_on)) {
-            DEBUG_PRINTLN_F("Failed to read IMU data!");
-            return; 
-        }
-
-        netVerticalAcceleration_ms2 = computeNetAcceleration(false);
-        // DEBUG_PRINT_F("Attitude time:");
-        // DEBUG_PRINTLN(millis() - attitudeTime);
-        barometricPressure_Pa = getPressaoBMPAtual(); 
-        tilt_deg = readCurrentTilt();
-    }
-
-    // --- Kalman Filter Execution ---
-    
-    // Control Input U for the Prediction Step
-    Eigen::Matrix<float, 1, 1> U_kf;
-    U_kf << netVerticalAcceleration_ms2;
-    
-    // Prediction Step
-    kf.Predict(U_kf);
-
-    // Altitude Measurement from Barometer
-    float measuredAltitude_m = altitudeFromPressure(barometricPressure_Pa);
-    
-    if (measuredAltitude_m > -9000.0f) { // Check for valid altitude measurement
-        Eigen::Matrix<float, 2, 1> Z_kf;
-        Z_kf << measuredAltitude_m, 0.0f; // Zero velocity measurement for ZUKF
-        kf.Update(Z_kf, R_kf);
-    } else {
-        DEBUG_PRINTLN_F("WARNING: Invalid altitude measurement. Kalman Update skipped.");
-    }
-
-    // Get the posteriori state estimate
-    Matrix<float, 2, 1> stateEstimate = kf.getPosterioriState();
-    filteredAltitude_m = stateEstimate(0, 0);
-    filteredVerticalVelocity_ms = stateEstimate(1, 0);
-    // DEBUG_PRINT_F("Kalman time:");
-    // DEBUG_PRINTLN(millis() - kalmanTime);
-}
-
-void updateLogger(RawFlightData &data){
-    
-    data.timestamp = millis();                                    // Timestamp [ms]
-    data.accX = mpu.getAccX();                                    // Body frame x axis acceleration [m/s²]
-    data.accY = mpu.getAccY();                                    // Body frame y axis acceleration [m/s²]
-    data.accZ = mpu.getAccZ();                                    // Body frame z axis acceleration [m/s²]
-    data.gyroX = mpu.getGyroX();                                  // Body frame x axis rotacional velocity [°/s]
-    data.gyroY = mpu.getGyroY();                                  // Body frame y axis rotacional velocity [°/s]
-    data.gyroZ = mpu.getGyroZ();                                  // Body frame z axis rotacional velocity [°/s]
-    data.magX = mpu.getMagX()/10.0;                               // Body frame x axis magnetic field [uT]
-    data.magY = mpu.getMagY()/10.0;                               // Body frame y axis magnetic field [uT]
-    data.magZ = mpu.getMagZ()/10.0;                               // Body frame z axis magnetic field [uT]
-    data.qW = mpu.getQuaternionW();                               // W quaternion component [-]
-    data.qX = mpu.getQuaternionX();                               // X quaternion component [-]
-    data.qY = mpu.getQuaternionY();                               // Y quaternion component [-]
-    data.qZ = mpu.getQuaternionZ();                               // Z quaternion component [-]
-    data.filteredAltitude = filteredAltitude_m;                   // Inertial frame filtered altitude (z) [m]
-    data.filteredVerticalVelocity = filteredVerticalVelocity_ms;  // Inertial frame filtered velocity (vz) [m/s]
-    data.netVerticalAcceleration = netVerticalAcceleration_ms2;   // Inertial frame net acceleration (az) [m/s²]
-    data.tilt = tilt_deg;                                         // Z axis tilt angle [°]
-    data.barometricPressure = barometricPressure_Pa;              // Barometric pressure [Pa]
-    data.airbrakeDeployment = airbrakeDeployment*100;             // Airbrake deployment [%]
-    data.gain1 = controlGain1;                                    // PID gain [-]
-    data.gain2 = controlGain2;                                    // Cd gain [-]
-    data.flightState = static_cast<int>(flightState);             // Flight state [-]
-}
-
-void calibrationCheckLoop() {
-    DEBUG_PRINTLN_F("STATE: Sensor Calibration");
-
-    if (hasCalibrationDataIMU() && getGroundPressureP0_BMP() != 101324.0f) { 
-        DEBUG_PRINTLN_F("Initial calibration (IMU/BMP P0) done in setup.");
-        flightState = FlightState::HEALTH_CHECK;
-        stateEntryTime = millis();
-    }
-}
-
-static u_int8_t healthCheckCount = 0; 
-const u_int8_t REQ_HEALTH_CHECKS = 5; 
-
-void healthCheckLoop() {
-    DEBUG_PRINTLN_F("State: Health Check");
-
-    recalibrateGroundPressure(); 
-
-    if (checkFlightSystemHealth(filteredAltitude_m, filteredVerticalVelocity_ms) || HIL_MODE_ACTIVE) { 
-        healthCheckCount++;
-        DEBUG_PRINT_F("Component health OK this iteration. Count: ");
-        DEBUG_PRINTLN(healthCheckCount);
-
-        if (healthCheckCount >= REQ_HEALTH_CHECKS || HIL_MODE_ACTIVE) {
-            Serial.println("HEALTH CHECK: Consecutive checks OK. Transitioning...");
-            signalSuccessfullModule("Health Check Complete"); 
-
-            flightState = FlightState::WAIT_LAUNCH;
-            DataManager::getInstance().startLogging(); // Activate data logging
-        
-            // System settings for wait-for-launch
-            DataManager::getInstance().setDecimationFactor(10); // Saves every 10x20ms = 200ms
-            setDriftLearning(true); // Enable drift learning on the IMU
-            setFilterBeta(2.5f); // Increase filter beta for faster response during wait
-            R_kf(1,1) = 0.000001f; // Reduce velocity measurement variance for ZUKF
-
-            stateEntryTime = millis();         
-            healthCheckCount = 0;    
-        }
-    } else {
-        DEBUG_PRINTLN_F("ERROR: Component health failure detected by checkFlightSystemHealth()!");
-        signalFailedModule("Health Check Iteration"); 
-        healthCheckCount = 0; // Reset count if any check fails   
-    }
-}
- 
-u_int8_t contador = 0;
-void waitLaunchLoop() {
-    contador ++;
-    // Continuously update ground pressure reference to compensate drift
-    recalibrateGroundPressure();
-    if (contador > print_count){
-        DEBUG_PRINT_F("STATE: WAIT_LAUNCH | Alt: ");
-        DEBUG_PRINT(filteredAltitude_m);
-        DEBUG_PRINT_F("m | VelZ: ");
-        DEBUG_PRINT(filteredVerticalVelocity_ms);
-        DEBUG_PRINT_F("m/s | AccelZ: ");
-        DEBUG_PRINT(netVerticalAcceleration_ms2);
-        DEBUG_PRINT_F("m/s^2 | Tilt: ");
-        DEBUG_PRINT(tilt_deg);
-        DEBUG_PRINTLN_F("°");
-        contador = 0;
-    }
-
-    if (detectLaunch(netVerticalAcceleration_ms2,filteredAltitude_m)) { 
-        DEBUG_PRINTLN_F("LAUNCH DETECTED!");
-        
-        // System settings for flight
-        setDriftLearning(false); // Disable drift learning on IMU after launch
-        setFilterBeta(0.0f);
-        R_kf(1,1) = 1000000000.0f; // Set high variance on velocity measurement to ignore zero input during flight
-        DataManager::getInstance().setDecimationFactor(1); // Save every 20ms during flight
-
-        flightState = FlightState::MOTOR_ON;
-        stateEntryTime = millis();
-        launchDetectedTime = millis(); 
-    }
-}
-
-void motorOnLoop() {
-    contador ++;
-    if (contador > print_count){
-        DEBUG_PRINT_F("STATE: MOTOR_ON | Alt: ");
-        DEBUG_PRINT(filteredAltitude_m);
-        DEBUG_PRINT_F("m | VelZ: ");
-        DEBUG_PRINT(filteredVerticalVelocity_ms);
-        DEBUG_PRINT_F("m/s | Tilt: ");
-        DEBUG_PRINT(tilt_deg);
-        DEBUG_PRINTLN_F("°");
-        contador = 0;
-    }
-
-    unsigned long tempoDesdeLancamento = millis() - launchDetectedTime;
-    if (detectBurnout(netVerticalAcceleration_ms2, tempoDesdeLancamento)) { 
-        DEBUG_PRINTLN_F("BURNOUT DETECTED!");
-        setFilterBeta(0.5f);
-        flightState = FlightState::BURNOUT; 
-        stateEntryTime = millis();
-    }
-}
-
-void loopBurnout() {
-    DEBUG_PRINT_F("STATE: Burnout | Alt: ");
-    DEBUG_PRINT(filteredAltitude_m);
-    DEBUG_PRINT_F("m | VelZ: ");
-    DEBUG_PRINT(filteredVerticalVelocity_ms);
-    DEBUG_PRINTLN_F("m/s");
-
-    if (detectAirbrakesActuation(filteredAltitude_m, filteredVerticalVelocity_ms)) {
-        DEBUG_PRINTLN_F("Appropriate speed detected, initiating airbrake actuation.");
-        flightState = FlightState::AIRBRAKE_DEPLOYMENT;
-        stateEntryTime = millis();
-    }
-}
-
-void airbrakeDeploymentLoop() {
-    contador ++;
-    if (contador > print_count){
-        DEBUG_PRINT_F("STATE: AIRBRAKE_DEPLOYMENT | Alt: ");
-        DEBUG_PRINT(filteredAltitude_m);
-        DEBUG_PRINT_F("m | VelZ: ");
-        DEBUG_PRINT(filteredVerticalVelocity_ms);
-        DEBUG_PRINT_F("m/s | Tilt: ");
-        DEBUG_PRINT(tilt_deg);
-        DEBUG_PRINT_F("° | Computed Deflection: ");
-        DEBUG_PRINTLN(airbrakeDeployment);
-        contador = 0;
-    }
-
-    // AIRBRAKE CONTROL LOGIC
-    delta_V_ms = lookUpSpeed(filteredAltitude_m) - filteredVerticalVelocity_ms;
-    controlGain1 = controller.computePID(0, delta_V_ms);
-    controlGain2 = controller.computeCd(3260, filteredAltitude_m, filteredVerticalVelocity_ms, -G_GRAVITATIONAL_CONSTANT, 1.293);
-    controlInput = controlGain1 + controlGain2;
-
-    if (tilt_deg < 20){
-        // Convert speed to Mach ---> vel/335
-
-        airbrakeDeployment = getNearestActuation((filteredVerticalVelocity_ms/335), controlInput); 
-    }
-    else{
-        airbrakeDeployment = 0.0; 
-    }
-
-    commandAirbrakes(airbrakeDeployment);
-
-    // if (detectApogee(filteredVerticalVelocity_ms, filteredAltitude_m)) { 
-    //     DEBUG_PRINTLN_F("APOGEE DETECTED!");
-    //     flightState = FlightState::APOGEE;
-    //     stateEntryTime = millis();
-    //     apogeeDetectedTime = millis();
-    // }
-
-     if (detectApogeeByRegression(filteredAltitude_m, millis())) { 
-        DEBUG_PRINTLN_F("APOGEE DETECTED!");
-        flightState = FlightState::APOGEE;
-        setFilterBeta(1.0);
-        stateEntryTime = millis();
-        apogeeDetectedTime = millis();
-    }
-     
-}
-
-void apogeeLoop() {
-    DEBUG_PRINT_F("STATE: APOGEE | Max Alt: ");
-    DEBUG_PRINT(filteredAltitude_m);
-    DEBUG_PRINTLN_F("m");
-
-    retractAirbrakes(); 
-    DEBUG_PRINTLN_F("Airbrakes retracted at apogee.");
-    
-    flightState = FlightState::DESCENT; 
-    DataManager::getInstance().setDecimationFactor(10); // Save every 10x20ms = 200ms
-    stateEntryTime = millis();
-}
-
-void descentLoop() {
-
-    contador ++;
-    if (contador > print_count){
-        DEBUG_PRINT_F("STATE: DESCENT | Alt: ");
-        DEBUG_PRINT(filteredAltitude_m);
-        DEBUG_PRINT_F("m | VelZ: ");
-        DEBUG_PRINT(filteredVerticalVelocity_ms);
-        DEBUG_PRINTLN_F("m/s");
-        contador = 0;
-    }
-
-    unsigned long tempoDesdeApogeu = millis() - apogeeDetectedTime;
-    if (detectLanding(filteredVerticalVelocity_ms, filteredAltitude_m, tempoDesdeApogeu)) { 
-        DEBUG_PRINTLN_F("LANDING DETECTED!");
-        flightState = FlightState::LANDING;
-        DataManager::getInstance().setDecimationFactor(50); // Save every 50x20ms = 1s
-        stateEntryTime = millis();
-    }
-
-     // Timeout for LANDING detection if not detected after long time
-     else if (tempoDesdeApogeu > MAX_WAIT_TIME_LANDING) {
-         DEBUG_PRINTLN_F("Timeout for LANDING detection.");
-         flightState = FlightState::LANDING; // Force LANDING state
-         DataManager::getInstance().setDecimationFactor(50); // Save every 50x20ms = 1s
-         stateEntryTime = millis();
-     }
-}
-
-void landingLoop() {
-    DEBUG_PRINTLN_F("STATE: LANDING");
-    // Continue saving final data for a short period (120000ms - 2min)
-    DataManager& logger = DataManager::getInstance();
-    if (logger.isLoggingActive() && (millis() - stateEntryTime)< 120000 ) {
-        logger.logDataSD(flightData); 
-    }
-    else{
-        logger.stopLogging(); // Desliga o data logging
-    }
-    DEBUG_PRINTLN_F("Operation finished. Awaiting recovery.");
-    delay(10000);
-}
+RawFlightData flightData;
+FlightController &flightController = FlightController::getInstance();
 
 // --- FreeRTOS Handles ---
 QueueHandle_t flightDataQueue;
@@ -511,238 +51,234 @@ void TaskLogging(void *pvParameters);
 void TaskSerialComm(void *pvParameters);
 
 void TaskFlightControl(void *pvParameters) {
-    esp_task_wdt_add(NULL); // Register this task with the Watchdog
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(Ts_ms); // 20ms
+  esp_task_wdt_add(NULL); // Register this task with the Watchdog
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+  const TickType_t xFrequency = pdMS_TO_TICKS(Ts_ms); // 20ms
 
-    for (;;) {
-        // 1. Full State Estimate Update (IMU/BMP/Kalman)
-        fullStateEstimateUpdate(); //
+  for (;;) {
 
-        // 2. Flight State Machine
-        switch (flightState) {
-            case FlightState::HEALTH_CHECK: healthCheckLoop(); break; //
-            case FlightState::WAIT_LAUNCH:  waitLaunchLoop();  break; //
-            case FlightState::MOTOR_ON:     motorOnLoop();     break; //
-            case FlightState::BURNOUT:      loopBurnout();     break; //
-            case FlightState::AIRBRAKE_DEPLOYMENT: airbrakeDeploymentLoop(); break; //
-            case FlightState::APOGEE:       apogeeLoop();      break; //
-            case FlightState::DESCENT:      descentLoop();     break; //
-            case FlightState::LANDING:      landingLoop();     break; //
-            default: break;
-        }
+    flightController.update(); // Update state machine and estimator 
 
-        // 3. Queue Data for Logging
-        RawFlightData snapshot;
-        updateLogger(snapshot);
-        xQueueSend(flightDataQueue, &snapshot, 0); // Non-blocking send
+    RawFlightData snapshot;
+    flightController.updateLogger(snapshot);
+    xQueueSend(flightDataQueue, &snapshot, 0); // Non-blocking send
 
-        esp_task_wdt_reset(); // Signal health to Watchdog
-        vTaskDelayUntil(&xLastWakeTime, xFrequency); // Wait for next 20ms cycle
-    }
+    esp_task_wdt_reset();                        // Signal health to Watchdog
+    vTaskDelayUntil(&xLastWakeTime, xFrequency); // Wait for next 20ms cycle
+  }
 }
 
 void TaskLogging(void *pvParameters) {
-    esp_task_wdt_add(NULL); // Register this task with the Watchdog
+  esp_task_wdt_add(NULL); // Register this task with the Watchdog
 
-    RawFlightData dataToLog;
-    DataManager& logger = DataManager::getInstance();
+  RawFlightData dataToLog;
+  DataManager &logger = DataManager::getInstance();
 
-    for (;;) {
-        // Block until data arrives in the queue
-        if (xQueueReceive(flightDataQueue, &dataToLog, portMAX_DELAY) == pdPASS) {
-            if (logger.isLoggingActive()) {
-                logger.logDataSD(dataToLog); 
-            }
-        }
-        esp_task_wdt_reset();
+  for (;;) {
+    // Block until data arrives in the queue
+    if (xQueueReceive(flightDataQueue, &dataToLog, portMAX_DELAY) == pdPASS) {
+      if (logger.isLoggingActive()) {
+        logger.logDataSD(dataToLog);
+      }
     }
+    esp_task_wdt_reset();
+  }
 }
 
 void TaskSerialComm(void *pvParameters) {
-    esp_task_wdt_add(NULL); // Register this task with the Watchdog
-    DataManager& logger = DataManager::getInstance();
-    for (;;) {
-        if (Serial.available()) {
-            char cmd = Serial.read();
-            esp_task_wdt_reset();
-        
-            if (cmd == 'd' || cmd == 'D') { 
-                Serial.println("Command received: Dump Log");
-                logger.dumpCurrentLog();
-                logger.stopLogging(); 
-            }
-            if (cmd == 'h' || cmd == 'H') { 
-                Serial.println("Command received: Load HIL File");
-                logger.stopLogging(); 
-                logger.receiveHILFile(HIL_FILENAME);
-            }
-            
-            if (cmd == 'l' || cmd == 'L') { 
-                Serial.println("Command received: List Files");
-                logger.listFiles();
-            }
+  esp_task_wdt_add(NULL); // Register this task with the Watchdog
+  DataManager &logger = DataManager::getInstance();
+  for (;;) {
+    if (Serial.available()) {
+      char cmd = Serial.read();
+      esp_task_wdt_reset();
 
-            if (cmd == 'c' || cmd == 'C') {
-                Serial.println("Command received: Clear All Logs");
-                logger.clearAllLogs();
-            }
+      if (cmd == 'd' || cmd == 'D') {
+        Serial.println("Command received: Dump Log");
+        logger.dumpCurrentLog();
+        logger.stopLogging();
+      }
+      if (cmd == 'h' || cmd == 'H') {
+        Serial.println("Command received: Load HIL File");
+        logger.stopLogging();
+        logger.receiveHILFile(HIL_FILENAME);
+      }
 
-            if (cmd == 'p' || cmd == 'P') {
-                Serial.println("Command received: Stop Logging");
-                logger.stopLogging(); 
-            }
-        }
-        esp_task_wdt_reset();
-        vTaskDelay(pdMS_TO_TICKS(50)); // Poll at 20Hz
+      if (cmd == 'l' || cmd == 'L') {
+        Serial.println("Command received: List Files");
+        logger.listFiles();
+      }
+
+      if (cmd == 'c' || cmd == 'C') {
+        Serial.println("Command received: Clear All Logs");
+        logger.clearAllLogs();
+      }
+
+      if (cmd == 'p' || cmd == 'P') {
+        Serial.println("Command received: Stop Logging");
+        logger.stopLogging();
+      }
     }
+    esp_task_wdt_reset();
+    vTaskDelay(pdMS_TO_TICKS(50)); // Poll at 20Hz
+  }
 }
 
 void setup() {
-    Serial.begin(115200);
-    // Wait for Serial to connect, with timeout
-    unsigned long serialStartTime = millis();
-    while (!Serial && (millis() - serialStartTime < 4000));
+  Serial.begin(115200);
+  // Wait for Serial to connect, with timeout
+  unsigned long serialStartTime = millis();
+  while (!Serial && (millis() - serialStartTime < 4000))
+    ;
 
-    // // Turn off WIFI 
-    // WiFi.disconnect(true);
-    // WiFi.mode(WIFI_OFF);
+  // // Turn off WIFI
+  // WiFi.disconnect(true);
+  // WiFi.mode(WIFI_OFF);
 
-    // // Turn off Bluetooth
-    // esp_bt_controller_disable();
-    // esp_bt_controller_deinit();
-    
-    if (!EEPROM.begin(EEPROM_SIZE)) {
-        DEBUG_PRINTLN_F("CRITICAL ERROR: Failed to initialize EEPROM!");
+  // // Turn off Bluetooth
+  // esp_bt_controller_disable();
+  // esp_bt_controller_deinit();
+
+  if (!EEPROM.begin(EEPROM_SIZE)) {
+    DEBUG_PRINTLN_F("CRITICAL ERROR: Failed to initialize EEPROM!");
+  } else {
+    DEBUG_PRINTLN_F("EEPROM initialized successfully.");
+  }
+
+  // Initialize basics: I2C, SPI and signaling system
+  Wire.begin();
+  Wire.setClock(400000); // Set I2C to 400kHz
+
+  setupSinalizacao();
+  signalStartupStart();
+
+  // eraseCalibration(); // First time calibration
+
+  // Create the Data Queue
+  flightDataQueue = xQueueCreate(20, sizeof(RawFlightData));
+
+  DEBUG_PRINTLN_F("==== INITIALIZING AIRBRAKE SYSTEM ====");
+  
+  // Benchmark the SD card 
+  // DataManager::getInstance().runFrequencyTest(16000000, 50, 1000, false);
+  // DataManager::getInstance().runStrategyBenchmark(16000000, 1000);
+
+
+
+  // Storage setup
+  DEBUG_PRINTLN_F("Initializing SD card...");
+  DataManager &logger = DataManager::getInstance();
+  if (!logger.setupSD()) {
+    signalFailedModule("Log SD Card Setup");
+    DEBUG_PRINTLN_F("FATAL ERROR: Failed to initialize SD card.");
+    buzzerBeeps(10, 300, 150, 1200);
+  } else {
+    signalSuccessfullModule("Log SD Card Setup");
+  }
+
+  if (!setup_IMU(CALIBRATE_IMU_ON_STARTUP, PERFORM_FINE_TUNING,
+                 PRINT_IMU_PARAMS)) {
+    signalFailedModule("IMU");
+    DEBUG_PRINTLN_F("FATAL ERROR: IMU setup failed. System halted.");
+    while (1) {
+      ledBlink(PIN_LED_STATUS_2, 1, 500, 500);
+      delay(100);
+    }
+  } else {
+    signalSuccessfullModule("IMU");
+  }
+
+  // Sensors or HIL setup
+  if (HIL_MODE_ACTIVE) {
+    DEBUG_PRINTLN_F("**** HIL MODE ACTIVATED ****");
+    if (logger.initHIL(HIL_FILENAME)) {
+
+      HILSimulationData firstSample = logger.readHILStep();
+
+      if (firstSample.valid) {
+        float pressaoInicial = firstSample.barometricPressure_Pa;
+        setGroundPressureP0_BMP(pressaoInicial);
+
+        DEBUG_PRINT_F("HIL: P0 set to: ");
+        DEBUG_PRINT(pressaoInicial);
+        DEBUG_PRINTLN_F(" Pa");
+
+        logger.resetHIL();
+
+      } else {
+        DEBUG_PRINTLN_F("HIL: Error - Empty file!");
+        while (1)
+          ;
+      }
+
+      signalSuccessfullModule("HIL Init");
     } else {
-        DEBUG_PRINTLN_F("EEPROM initialized successfully.");
+      DEBUG_PRINTLN_F("HIL FATAL ERROR: File not found!");
+      while (1)
+        ;
     }
 
-    // Initialize basics: I2C, SPI and signaling system
-    Wire.begin();
-    Wire.setClock(400000); // Set I2C to 400kHz - test different values if necessary ---> wire length influences
-    
-    setupSinalizacao();
-    signalStartupStart();
-
-    // eraseCalibration(); // First time calibration
-
-    // Create the Data Queue
-    flightDataQueue = xQueueCreate(20, sizeof(RawFlightData));
-
-    DEBUG_PRINTLN_F("==== INITIALIZING AIRBRAKE SYSTEM ====");
-
-    // Storage setup
-    DEBUG_PRINTLN_F("Initializing SD card...");
-    DataManager& logger = DataManager::getInstance();
-    if (!logger.setupSD()) {
-        signalFailedModule("Log SD Card Setup");
-        DEBUG_PRINTLN_F("FATAL ERROR: Failed to initialize SD card.");
-        buzzerBeeps(10,300,150, 1200);
+  } else {
+    DEBUG_PRINTLN_F("Initializing BMP (setup_BMP)...");
+    if (!setupBMP()) {
+      signalFailedModule("BMP280");
+      DEBUG_PRINTLN_F("FATAL ERROR: BMP280 setup failed. System halted.");
+      while (1) {
+        ledBlink(PIN_LED_STATUS_2, 1, 500, 500);
+        delay(100);
+      }
     } else {
-        signalSuccessfullModule("Log SD Card Setup");
+      signalSuccessfullModule("BMP280");
     }
+    DEBUG_PRINTLN_F("**** REAL FLIGHT MODE ACTIVATED ****");
+  }
 
-    if (!setup_IMU(calibrate_imu_on_startup, perform_fine_tuning, print_imu_params)) {
-        signalFailedModule("IMU");
-        DEBUG_PRINTLN_F("FATAL ERROR: IMU setup failed. System halted.");
-        while (1) { ledBlink(PIN_LED_STATUS_2, 1, 500, 500); delay(100); }
-    } else {
-        signalSuccessfullModule("IMU");
+  if (flightController.setupServo()) {
+    signalSuccessfullModule("Servo");
+    flightController.retractAirbrakes();
+  } else {
+    signalFailedModule("Servo");
+    DEBUG_PRINTLN_F("FATAL ERROR: Servo setup failed.");
+    while (1) {
+      ledBlink(PIN_LED_STATUS_2, 1, 250, 250);
+      delay(100);
     }
+  }
 
-    // Sensors or HIL setup
-    if (HIL_MODE_ACTIVE) {
-        DEBUG_PRINTLN_F("**** HIL MODE ACTIVATED ****");
-        if (logger.initHIL(HIL_FILENAME)) {
-            
-            
-            HILSimulationData firstSample = logger.readHILStep();
-            
-            if (firstSample.valid) {
-                float pressaoInicial = firstSample.barometricPressure_Pa;
-                setGroundPressureP0_BMP(pressaoInicial);
+  delay(500); // Time to stabilize data
 
-                DEBUG_PRINT_F("HIL: P0 set to: ");
-                DEBUG_PRINT(pressaoInicial);
-                DEBUG_PRINTLN_F(" Pa");
-                
-                logger.resetHIL(); 
-                
-            } else {
-                DEBUG_PRINTLN_F("HIL: Error - Empty file!");
-                while(1); 
-            }
-            
-            signalSuccessfullModule("HIL Init");
-        } else {
-            DEBUG_PRINTLN_F("HIL FATAL ERROR: File not found!");
-            while(1);
-        }
+  DEBUG_PRINTLN_F("Initializing Controller...");
+  flightController.setupController();
+  signalSuccessfullModule("Controller");
+  delay(100);
 
-    } else {
-        DEBUG_PRINTLN_F("Initializing BMP (setup_BMP)...");
-        if (!setupBMP()) { 
-            signalFailedModule("BMP280");
-            DEBUG_PRINTLN_F("FATAL ERROR: BMP280 setup failed. System halted.");
-            while (1) { ledBlink(PIN_LED_STATUS_2, 1, 500, 500); delay(100); }
-        } else {
-            signalSuccessfullModule("BMP280");
-        }
-        DEBUG_PRINTLN_F("**** REAL FLIGHT MODE ACTIVATED ****");
-        }
-     
-    if (setupServo()) { 
-        signalSuccessfullModule("Servo");
-        retractAirbrakes(); 
-    } else {
-        signalFailedModule("Servo");
-        DEBUG_PRINTLN_F("FATAL ERROR: Servo setup failed.");
-        while (1) { ledBlink(PIN_LED_STATUS_2, 1, 250, 250); delay(100); }
-    }
+  // Setup Kalman and Controller
+  DEBUG_PRINTLN_F("Initializing Kalman Filter...");
+  flightController.setupKalman();
 
-    delay(500); // Time to stabilize data
+  Serial.flush();
 
-    DEBUG_PRINTLN_F("Initializing Controller...");
-    setupController(); 
-    signalSuccessfullModule("Controller");
-    delay(100);
+  if (HIL_MODE_ACTIVE) {
+    DEBUG_PRINTLN("HIL Mode: Forcing state to WAIT_LAUNCH");
+    flightController.forceState(FlightState::WAIT_LAUNCH);
+  }
 
-    // Setup Kalman and Controller 
-    DEBUG_PRINTLN_F("Initializing Kalman Filter...");
-    setupKalman(); 
+  DEBUG_PRINTLN("WDT: Initializing Watchdog...");
+  esp_task_wdt_reconfigure(&twdt_config);
+  DEBUG_PRINTLN("WDT: Active.");
 
-    Serial.flush();
+  // Launch High-Priority Flight Task on Core 1
+  xTaskCreatePinnedToCore(TaskFlightControl, "Flight", 8192, NULL, 5, NULL, 1);
 
-    stateEntryTime = millis();
-    previousLoopTime = millis();
-    if (!HIL_MODE_ACTIVE){
-        flightState = FlightState::HEALTH_CHECK; 
-    }
-    else {
-        flightState =  FlightState::WAIT_LAUNCH; 
-        logger.startLogging();
-    }
+  // Launch I/O Tasks on Core 0
+  xTaskCreatePinnedToCore(TaskLogging, "Logging", 4096, NULL, 2, NULL, 0);
+  xTaskCreatePinnedToCore(TaskSerialComm, "Serial", 4096, NULL, 3, NULL, 0);
 
-    DEBUG_PRINTLN("WDT: Initializing Watchdog...");
-    esp_task_wdt_reconfigure(&twdt_config);
-    DEBUG_PRINTLN("WDT: Active.");
+  DEBUG_PRINTLN_F("All optional setups and tests completed.");
+  signalStartupComplete();
 
-
-    // Launch High-Priority Flight Task on Core 1
-    xTaskCreatePinnedToCore(TaskFlightControl, "Flight", 8192, NULL, 5, NULL, 1);
-
-    // Launch I/O Tasks on Core 0
-    xTaskCreatePinnedToCore(TaskLogging, "Logging", 4096, NULL, 2, NULL, 0);
-    xTaskCreatePinnedToCore(TaskSerialComm, "Serial", 4096, NULL, 3, NULL, 0);
-
-    DEBUG_PRINTLN_F("All optional setups and tests completed.");
-    signalStartupComplete(); 
-
-    DEBUG_PRINT_F("Transitioning to initial state: "); 
-    DEBUG_PRINTLN((int)flightState); 
+  DEBUG_PRINT_F("Transitioning to initial state: ");
+  DEBUG_PRINTLN((int)flightController.getFlightState());
 }
 
-void loop() {
-    vTaskDelay(pdMS_TO_TICKS(1000));
-}
+void loop() { vTaskDelay(pdMS_TO_TICKS(1000)); }

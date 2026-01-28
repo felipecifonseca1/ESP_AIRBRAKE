@@ -12,7 +12,7 @@ MPU9250Setting mpuConfig;
 
 const float ACCEL_CALIB_SENSITIVITY_FS = 16384.0f; // LSB/g ( Range for calib = +/-2g)
 const float GYRO_CALIB_SENSITIVITY_FS  = 131.0f;   // LSB/(deg/s) ( Range for calib = +/-250dps)
-const bool z_axis_down = false; // Defines the orientation of the IMU Z axis
+
 
 /**
  * @brief Saves the IMU calibration parameters to EEPROM.
@@ -215,7 +215,7 @@ void test_bias_for_adjust(int samples, float result_accel_g[3], float result_gyr
             gyro_sum[2] += mpu.getGyroZ(); // Unit: 'dps'
             
             // Gravity compensation on Z axis
-            if (z_axis_down) {
+            if (PHYSICAL_Z_AXIS_DOWN) {
                 accel_sum[2] -= 1.0f; 
             } else {
                 accel_sum[2] += 1.0f; 
@@ -352,7 +352,7 @@ void calibration_IMU(bool print_debug, bool perform_fine_tuning) {
     DEBUG_PRINTLN_F("Calibrating Accel/Gyro (MPU9250 lib)... Keep still and level.");
     if(print_debug) mpu.verbose(true);
     delay(2000);
-    mpu.calibrateAccelGyro(z_axis_down); 
+    mpu.calibrateAccelGyro(PHYSICAL_Z_AXIS_DOWN); 
 
     DEBUG_PRINTLN_F("Calibrating Magnetometer (MPU9250 lib)... Move in a figure-eight pattern.");
     delay(2000);
@@ -429,18 +429,18 @@ bool setup_IMU(bool calibrate_if_needed, bool perform_fine_tuning_on_calib, bool
         return false;
     }
     loadCalibration(print_params); // Load latest biases from EEPROM and apply to the mpu object
-    reset_orientation(z_axis_down);
+    reset_orientation(PHYSICAL_Z_AXIS_DOWN);
     DEBUG_PRINTLN_F("SETUP_IMU: Completed successfully and ready for flight.");
     return true;
 }
 
 /**
  * @brief Resets the orientation (Quaternions) to default.
- * * @param z_axis_down If true, considers the sensor's Z-axis pointing downwards.
+ * * @param PHYSICAL_Z_AXIS_DOWN If true, considers the sensor's Z-axis pointing downwards.
  * Useful if the filter diverges significantly before launch.
  */
-void reset_orientation(bool z_axis_down){
-    mpu.resetOrientation(z_axis_down);
+void reset_orientation(bool PHYSICAL_Z_AXIS_DOWN){
+    mpu.resetOrientation(PHYSICAL_Z_AXIS_DOWN);
 }
 
 /**
@@ -475,7 +475,7 @@ void print_roll_pitch_yaw() {
  * @brief Calculates the rocket's tilt relative to the vertical.
  * * @details Uses Quaternions to calculate the angle between the body's Z-axis 
  * and the gravity vector. Essential for safety (e.g., preventing airbrake deployment if tilted).
- * * @note 0° = Body Z-axis aligned with World Z (up or down, depending on z_axis_down).
+ * * @note 0° = Body Z-axis aligned with World Z (up or down, depending on PHYSICAL_Z_AXIS_DOWN).
  * 90° = Rocket is horizontal.
  * @return float Tilt angle in degrees [0° to 180°].
  */
@@ -498,7 +498,7 @@ float calcTilt() {
 
     float tilt_deg = tilt_rad * RAD_TO_DEG;
 
-    if (!z_axis_down){
+    if (!PHYSICAL_Z_AXIS_DOWN){
         tilt_deg = (180.0f - tilt_deg);
     }
     
