@@ -48,18 +48,17 @@ void saveCalibration(bool print) {
  * @details Writes zeros to the memory to force a new calibration on next initialization.
  **/
 void eraseCalibration() {
-    float empty_data[3] = {NAN, NAN, NAN};  // Uses NAN to indicate no calibration
-
-    EEPROM.put(0, empty_data);  // Deletes accel_bias
-    EEPROM.put(sizeof(empty_data), empty_data);  // Deletes gyro_bias
-    EEPROM.put(sizeof(empty_data) * 2, empty_data);  // Deletes mag_bias
-    EEPROM.put(sizeof(empty_data) * 3, empty_data);  // Deletes mag_scale
-
+    DEBUG_PRINTLN_F("DEBUG_CALIB: eraseCalibration() called.");
+    
+    // Wipe with 0xFF 
+    for (int i = 0; i < (sizeof(float) * 12); i++) {
+        EEPROM.write(i, 0xFF);
+    }
 
     if (EEPROM.commit()) {
-        DEBUG_PRINTLN("Calibration erased from EEPROM.");
+        DEBUG_PRINTLN_F("Calibration erased from EEPROM (Wiped 0xFF).");
     } else {
-        DEBUG_PRINTLN("ERROR: Failed to erase EEPROM!");
+        DEBUG_PRINTLN_F("ERROR: Failed to erase EEPROM!");
     }
 }
 
@@ -103,6 +102,7 @@ void loadCalibration(bool print) {
 bool hasCalibrationDataIMU() {
     float test_value;
     EEPROM.get(0, test_value);
+    DEBUG_PRINT_F("DEBUG_CALIB: Read value from EEPROM[0]: "); DEBUG_PRINTLN(test_value, 6);
     return !isnan(test_value);  
 }
 

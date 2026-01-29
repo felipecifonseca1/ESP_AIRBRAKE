@@ -129,29 +129,29 @@ private:
   float _delta_V_ms = 0.0f;
 
   // Controller Constants 
-  const float _Kp = 0.025f;
-  const float _Ki = 0.075f;
-  const float _Kd = 0.02f;
-  const float _mass_kg = 30.605f;
-  const float _area_m2 = 0.02097f;
-  const float _Ts_ms = 20.0f;
-  const float _Ts = 0.020f; // 20ms / 1000
+  const float _Kp = PID_KP;
+  const float _Ki = PID_KI;
+  const float _Kd = PID_KD;
+  const float _mass_kg = ROCKET_MASS_KG;
+  const float _area_m2 = ROCKET_AREA_M2;
+  const float _Ts_ms = Ts_ms;
+  const float _Ts = Ts;
 
   // Servo
   Servo _airbrakeServo;
-  const uint8_t _pinServoAirbrake = 27;
-  const uint16_t _servoMinPulse = 560;  // 0 deg
-  const uint16_t _servoMaxPulse = 1520; // 90 deg
+  const uint8_t _pinServoAirbrake = PIN_SERVO;
+  const uint16_t _servoMinPulse = SERVO_MIN_PULSE;  // 0 deg
+  const uint16_t _servoMaxPulse = SERVO_MAX_PULSE; // 90 deg
   bool _testServo = false;
 
   // Launch Detection Constants
-  const float _accelLimitLaunch = 1.5f * 9.80665f;
+  const float _accelLimitLaunch = LAUNCH_ACCEL_THRESHOLD_G * G_GRAVITATIONAL_CONSTANT;
   const int8_t _heightLimitLaunch = 4;
 
   // Burnout Detection
   static const int _burnoutWindowSize = 20;
-  const uint16_t _minMotorBurnTime = 5000;
-  const float _accelLimitBurnout = -0.5f;
+  const uint16_t _minMotorBurnTime = BURNOUT_MIN_MOTOR_TIME_MS;
+  const float _accelLimitBurnout = BURNOUT_ACCEL_THRESHOLD_G * G_GRAVITATIONAL_CONSTANT;
   const int _burnoutConfirmationCount = 5;
 
   // Burnout Buffer State
@@ -166,7 +166,7 @@ private:
   const float _velLimitActuation = 0.7f * 335.0f; // 0.7 Mach
 
   // Apogee Detection
-  const float _velLimitApogee = 0.5f;
+  const float _velLimitApogee = APOGEE_VEL_THRESHOLD_MS;
   const uint8_t _readingsForApogeeConfirmation = 10;
 
   // Apogee State

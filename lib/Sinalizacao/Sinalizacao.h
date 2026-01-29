@@ -2,24 +2,21 @@
 #define SINALIZACAO_H
 
 #include <Arduino.h> 
-// --- Pins ---
-const u_int8_t PIN_BUZZER = 14;
-const u_int8_t PIN_LED_STATUS_1 = 12; // Ex: LED 1
-const u_int8_t PIN_LED_STATUS_2 = 4; // Ex: LED 2
+#include "Config_voo.h"
 
 // Initial pin setup for signaling system
 void setupSinalizacao();
 
 // Basic buzzer functions
-void buzzerOn(unsigned int frequency = 1000); 
+void buzzerOn(uint16_t frequency = 1000); 
 void buzzerOff();
-void buzzerBeep(unsigned int duration, unsigned int frequency = 1000);
-void buzzerBeeps(int numberOfBeeps, unsigned int durationBeeps, unsigned int durationPause, unsigned int frequency = 1000);
+void buzzerBeep(uint16_t duration, uint16_t frequency = 1000);
+void buzzerBeeps(uint8_t numberOfBeeps, uint16_t durationBeeps, uint16_t durationPause, uint16_t frequency = 1000);
 
 // Basic LED functions
-void ledOn(int pin_led);
-void ledOff(int pin_led);
-void ledBlink(int pin_led, int numberOfBlinks, unsigned int durationOn, unsigned int durationOff);
+void ledOn(uint8_t pin_led);
+void ledOff(uint8_t pin_led);
+void ledBlink(uint8_t pin_led, uint8_t numberOfBlinks, uint16_t durationOn, uint16_t durationOff);
 
 // Startup Signals
 void signalStartupStart(); 

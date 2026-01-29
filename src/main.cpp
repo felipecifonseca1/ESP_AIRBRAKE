@@ -15,10 +15,6 @@
 #include <esp_task_wdt.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
-#include <freertos/task.h>
-
-// #include <WiFi.h>
-// #include <esp_bt.h>
 
 // Modules
 #include "FlightController.h"
@@ -124,25 +120,52 @@ void TaskSerialComm(void *pvParameters) {
   }
 }
 
+/**
+ * @brief Helper to verify module initialization and handle errors.
+ * @param success Condition to check
+ * @param moduleName Name for logging
+ * @param fatal If true, halts system on failure
+ */
+void verifyModule(bool success, const char* moduleName, bool fatal = true) {
+    if (success) {
+        signalSuccessfullModule(moduleName);
+    } else {
+        signalFailedModule(moduleName);
+        DEBUG_PRINT_F("FATAL ERROR: Module '");
+        DEBUG_PRINT_F(moduleName);
+        if (moduleName == "SD Card") {
+            DEBUG_PRINTLN_F("' setup failed.");
+            return;
+        } else {
+            DEBUG_PRINTLN_F("' setup failed. System halted.");
+        }
+        
+        if (fatal) {
+            while (1) {
+                // Blink Fast for Error
+                ledBlink(LED_BUILTIN, 2, 100, 100); 
+                delay(500);
+            }
+        }
+    }
+}
+
 void setup() {
   Serial.begin(115200);
   // Wait for Serial to connect, with timeout
   unsigned long serialStartTime = millis();
-  while (!Serial && (millis() - serialStartTime < 4000))
-    ;
+  while (!Serial && (millis() - serialStartTime < 4000));
 
-  // // Turn off WIFI
-  // WiFi.disconnect(true);
-  // WiFi.mode(WIFI_OFF);
+  DEBUG_PRINTLN_F("==== INITIALIZING AIRBRAKE SYSTEM ====");
 
-  // // Turn off Bluetooth
-  // esp_bt_controller_disable();
-  // esp_bt_controller_deinit();
 
   if (!EEPROM.begin(EEPROM_SIZE)) {
     DEBUG_PRINTLN_F("CRITICAL ERROR: Failed to initialize EEPROM!");
   } else {
     DEBUG_PRINTLN_F("EEPROM initialized successfully.");
+    if (ERASE_CALIBRATION_ON_STARTUP) {
+      eraseCalibration(); // First time calibration
+    }
   }
 
   // Initialize basics: I2C, SPI and signaling system
@@ -152,41 +175,22 @@ void setup() {
   setupSinalizacao();
   signalStartupStart();
 
-  // eraseCalibration(); // First time calibration
+
 
   // Create the Data Queue
   flightDataQueue = xQueueCreate(20, sizeof(RawFlightData));
 
-  DEBUG_PRINTLN_F("==== INITIALIZING AIRBRAKE SYSTEM ====");
-  
   // Benchmark the SD card 
   // DataManager::getInstance().runFrequencyTest(16000000, 50, 1000, false);
   // DataManager::getInstance().runStrategyBenchmark(16000000, 1000);
 
-
-
   // Storage setup
   DEBUG_PRINTLN_F("Initializing SD card...");
   DataManager &logger = DataManager::getInstance();
-  if (!logger.setupSD()) {
-    signalFailedModule("Log SD Card Setup");
-    DEBUG_PRINTLN_F("FATAL ERROR: Failed to initialize SD card.");
-    buzzerBeeps(10, 300, 150, 1200);
-  } else {
-    signalSuccessfullModule("Log SD Card Setup");
-  }
+  verifyModule(logger.setupSD(), "SD Card", false);
 
-  if (!setup_IMU(CALIBRATE_IMU_ON_STARTUP, PERFORM_FINE_TUNING,
-                 PRINT_IMU_PARAMS)) {
-    signalFailedModule("IMU");
-    DEBUG_PRINTLN_F("FATAL ERROR: IMU setup failed. System halted.");
-    while (1) {
-      ledBlink(PIN_LED_STATUS_2, 1, 500, 500);
-      delay(100);
-    }
-  } else {
-    signalSuccessfullModule("IMU");
-  }
+  // IMU Setup
+  verifyModule(setup_IMU(CALIBRATE_IMU_ON_STARTUP, PERFORM_FINE_TUNING, PRINT_IMU_PARAMS), "IMU");
 
   // Sensors or HIL setup
   if (HIL_MODE_ACTIVE) {
@@ -213,37 +217,19 @@ void setup() {
 
       signalSuccessfullModule("HIL Init");
     } else {
-      DEBUG_PRINTLN_F("HIL FATAL ERROR: File not found!");
-      while (1)
-        ;
+        DEBUG_PRINTLN_F("HIL FATAL ERROR: File not found!");
+        while (1); 
     }
 
   } else {
     DEBUG_PRINTLN_F("Initializing BMP (setup_BMP)...");
-    if (!setupBMP()) {
-      signalFailedModule("BMP280");
-      DEBUG_PRINTLN_F("FATAL ERROR: BMP280 setup failed. System halted.");
-      while (1) {
-        ledBlink(PIN_LED_STATUS_2, 1, 500, 500);
-        delay(100);
-      }
-    } else {
-      signalSuccessfullModule("BMP280");
-    }
+    verifyModule(setupBMP(), "BMP280");
     DEBUG_PRINTLN_F("**** REAL FLIGHT MODE ACTIVATED ****");
   }
 
-  if (flightController.setupServo()) {
-    signalSuccessfullModule("Servo");
-    flightController.retractAirbrakes();
-  } else {
-    signalFailedModule("Servo");
-    DEBUG_PRINTLN_F("FATAL ERROR: Servo setup failed.");
-    while (1) {
-      ledBlink(PIN_LED_STATUS_2, 1, 250, 250);
-      delay(100);
-    }
-  }
+  // Servo Setup
+  verifyModule(flightController.setupServo(), "Servo");
+  flightController.retractAirbrakes();
 
   delay(500); // Time to stabilize data
 
@@ -277,7 +263,7 @@ void setup() {
   DEBUG_PRINTLN_F("All optional setups and tests completed.");
   signalStartupComplete();
 
-  DEBUG_PRINT_F("Transitioning to initial state: ");
+  DEBUG_PRINT_F("System Ready. Initial State: ");
   DEBUG_PRINTLN((int)flightController.getFlightState());
 }
 

@@ -7,18 +7,18 @@
  */
 void setupSinalizacao() {
     pinMode(PIN_BUZZER, OUTPUT);
-    pinMode(PIN_LED_STATUS_1, OUTPUT);
-    pinMode(PIN_LED_STATUS_2, OUTPUT);
+    pinMode(PIN_LED_1, OUTPUT);
+    pinMode(PIN_LED_2, OUTPUT);
     digitalWrite(PIN_BUZZER, LOW);
-    digitalWrite(PIN_LED_STATUS_1, LOW);
-    digitalWrite(PIN_LED_STATUS_2, LOW);
+    digitalWrite(PIN_LED_1, LOW);
+    digitalWrite(PIN_LED_2, LOW);
 }
 
 /**
  * @brief Turns on the buzzer at a specific frequency.
  * @param frequency The frequency to set the buzzer to (in Hz).
  */
-void buzzerOn(unsigned int frequency) {
+void buzzerOn(uint16_t frequency) {
     tone(PIN_BUZZER, frequency);
 }
 
@@ -35,7 +35,7 @@ void buzzerOff() {
  * @param duration The duration to keep the buzzer on (in milliseconds).
  * @param frequency The frequency to set the buzzer to (in Hz).
  */
-void buzzerBeep(unsigned int duration, unsigned int frequency) {
+void buzzerBeep(uint16_t duration, uint16_t frequency) {
     tone(PIN_BUZZER, frequency, duration); 
 }
 
@@ -47,7 +47,7 @@ void buzzerBeep(unsigned int duration, unsigned int frequency) {
  * @param frequency The frequency to set the buzzer to (in Hz).
  * @warning A funcao esta quebrada
  */
-void buzzerBeeps(int numberOfBeeps, unsigned int durationBeeps, unsigned int durationPause, unsigned int frequency) {
+void buzzerBeeps(uint8_t numberOfBeeps, uint16_t durationBeeps, uint16_t durationPause, uint16_t frequency) {
    
     tone(PIN_BUZZER, frequency, durationBeeps); 
 }
@@ -56,7 +56,7 @@ void buzzerBeeps(int numberOfBeeps, unsigned int durationBeeps, unsigned int dur
  * @brief Turns on the specified LED.
  * @param pin_led The pin number of the LED to turn on.
  */
-void ledOn(int pin_led) {
+void ledOn(uint8_t pin_led) {
     digitalWrite(pin_led, HIGH);
 }
 
@@ -64,7 +64,7 @@ void ledOn(int pin_led) {
  * @brief Turns off the specified LED.
  * @param pin_led The pin number of the LED to turn off.
  */
-void ledOff(int pin_led) {
+void ledOff(uint8_t pin_led) {
     digitalWrite(pin_led, LOW);
 }
 
@@ -76,9 +76,13 @@ void ledOff(int pin_led) {
  * @param durationOff The duration the LED stays off between blinks (in milliseconds).
  * @warning A funcao esta quebrada
  */
-void ledBlink(int pin_led, int numberOfBlinks, unsigned int durationOn, unsigned int durationOff) {
-    digitalWrite(pin_led, HIGH);
- 
+void ledBlink(uint8_t pin_led, uint8_t numberOfBlinks, uint16_t durationOn, uint16_t durationOff) {
+    for (int i = 0; i < numberOfBlinks; i++) {
+        digitalWrite(pin_led, HIGH);
+        delay(durationOn);
+        digitalWrite(pin_led, LOW);
+        if (durationOff > 0) delay(durationOff);
+    }
 }
 
 /**
@@ -86,7 +90,7 @@ void ledBlink(int pin_led, int numberOfBlinks, unsigned int durationOn, unsigned
  */
 void signalStartupStart() {
     DEBUG_PRINTLN_F("ALERTS: Iniciando Startup...");
-    ledOn(PIN_LED_STATUS_1);
+    ledOn(PIN_LED_1);
     buzzerBeep(0, 800); 
 }
 
@@ -105,7 +109,7 @@ void signalSuccessfullModule(const char* moduleName) {
  */
 void signalFailedModule(const char* moduleName) {
     DEBUG_PRINT_F("ALERTS: FAILED Module [");DEBUG_PRINT_F(moduleName); DEBUG_PRINTLN_F("]!");
-    ledOn(PIN_LED_STATUS_2); 
+    ledOn(PIN_LED_2); 
     tone(PIN_BUZZER, 500, 1000); 
 }
 
@@ -114,6 +118,6 @@ void signalFailedModule(const char* moduleName) {
  */
 void signalStartupComplete() {
     DEBUG_PRINTLN_F("ALERTS: System READY.");
-    ledOn(PIN_LED_STATUS_1);
+    ledOn(PIN_LED_1);
     tone(PIN_BUZZER, 3000, 200); 
 }

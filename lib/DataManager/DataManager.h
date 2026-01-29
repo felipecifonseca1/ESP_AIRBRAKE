@@ -44,9 +44,9 @@ struct RawFlightData {
     float netVerticalAcceleration;
     float tilt; 
     float barometricPressure;
-    int airbrakeDeployment;
+    int16_t airbrakeDeployment;
     float gain1, gain2;
-    int flightState;
+    uint8_t flightState;
 };
 
 struct HILSimulationData {
@@ -123,6 +123,18 @@ public:
 
 private:
     DataManager(); // Private constructor for singleton
+    // State initialization
+    void initStates() {
+        _loggingActive = false;
+        _stopRequested = false;
+        _HILLoggingActive = false;
+        _decimationFactor = 1;
+        _decimationCounter = 0;
+        _sdAvailable = false;
+        _sdRecordCounter = 0;
+        _sdLEDCounter = 0;
+        // ... (Flash/Helpers init is in constructor)
+    }
 
     // Data directories
     const char* _logFolder = "/REG_VOO"; 
@@ -131,6 +143,7 @@ private:
     
     // State variables
     bool _loggingActive;
+    volatile bool _stopRequested;
     bool _HILLoggingActive;
     HILMode _currentHILMode = HILMode::NONE;
     uint16_t _decimationFactor;
@@ -139,24 +152,24 @@ private:
     // SD Card
     File _logFile;
     File _hilFile;
-
     String _currentSDFileName;
     bool _sdAvailable;
     uint8_t _sdRecordCounter;
-    const uint8_t _sdFlushLimit = 50;
+    uint8_t _sdLEDCounter;
     const uint32_t PRE_ALLOC_SIZE = 20 * 1024 * 1024; // 20 Mb files
+    const uint32_t _sdWriteTimeoutMs = 80;            // 80ms timeout
 
     // Pins VSPI
-    const u_int8_t _pinCS_SD = 5; 
-    const u_int8_t _pinSCK_SD = 18; 
-    const u_int8_t _pinMOSI_SD = 23; 
-    const u_int8_t _pinMISO_SD = 19; 
-
+    const u_int8_t _pinCS_SD = PIN_SD_CS; 
+    const u_int8_t _pinSCK_SD = PIN_SD_SCK; 
+    const u_int8_t _pinMOSI_SD = PIN_SD_MOSI; 
+    const u_int8_t _pinMISO_SD = PIN_SD_MISO; 
+    
     // Flash SPI
     SPIFlash _flash;
     uint32_t _flashAddr;
     bool _flashAvailable;
-    const u_int8_t _pinCS_Flash = 4;
+    const u_int8_t _pinCS_Flash = PIN_FLASH_CS;
 
     // Stabilization variables
     bool _hilStabilizing;             // Flag to indicate stabilization state

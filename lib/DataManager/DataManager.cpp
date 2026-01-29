@@ -1,5 +1,6 @@
 #include "DataManager.h"
 #include <esp_task_wdt.h>
+#include "Sinalizacao.h"
 
 // Singleton Instance Getter
 DataManager& DataManager::getInstance() {
@@ -10,11 +11,13 @@ DataManager& DataManager::getInstance() {
 // Constructor: Initializes internal members
 DataManager::DataManager() : 
     _loggingActive(false),
+    _stopRequested(false),
     _HILLoggingActive(false),
     _decimationFactor(1),
     _decimationCounter(0),
     _sdAvailable(false),
     _sdRecordCounter(0),
+    _sdLEDCounter(0),
     _flash(_pinCS_Flash, 0xEF40), // Generic JEDEC ID for W25Q128
     _flashAddr(0),
     _flashAvailable(false),
@@ -96,10 +99,22 @@ void DataManager::startLogging() {
  * @brief Stops the general logging.
  */
 void DataManager::stopLogging() {
-    _loggingActive = false;
-    if (_sdAvailable && _logFile) {
+    _stopRequested = true;
+    DEBUG_PRINTLN_F("LOG: Stop requested. Waiting for logging loop...");
+    
+    // Wait for the logging loop to pick up the request and close safely
+    uint32_t startWait = millis();
+    while (_loggingActive && (millis() - startWait < 200)) {
+        delay(5);
+    }
+    
+    if (_loggingActive) {
+        // If timed out, force close (safety net)
+        DEBUG_PRINTLN_F("LOG: Timeout waiting for loop. Force closing.");
         closeSDCard();
     }
+    
+    _stopRequested = false;
     DEBUG_PRINTLN_F("LOG: Stopped.");
 }
 
@@ -122,11 +137,13 @@ void DataManager::setDecimationFactor(uint16_t factor) {
  * closes the log file, and updates the logging status.
  **/
 void DataManager::closeSDCard() {
-    if (_sdAvailable && _logFile) {
-        _logFile.flush();
-        _logFile.close();
+    if (_sdAvailable) {
+        if (_logFile) {
+            _logFile.flush();
+            _logFile.close();
+        }
         DEBUG_PRINTLN_F("SD: SD card closed.");
-        _sdAvailable = false;
+        // _sdAvailable = false; // Don't mark SD as unavailable, just the file closed.
         _loggingActive = false;
     }
 }
@@ -140,6 +157,12 @@ void DataManager::closeSDCard() {
  * @param data A RawFlightData struct containing the flight data to be logged.
  **/
 void DataManager::logDataSD(const RawFlightData& data) {
+    // Handle Stop Request synchronously
+    if (_stopRequested) {
+        if (_loggingActive) closeSDCard(); 
+        return;
+    }
+
     if (!_sdAvailable || !_loggingActive) return;
 
     // Safety check: Logic handles opening if closed
@@ -153,6 +176,8 @@ void DataManager::logDataSD(const RawFlightData& data) {
 
     _decimationCounter = 0; // Reset and save now
     
+    uint32_t startTime = millis();
+
     // Ensure file is open
     if (!_logFile) {
         _logFile = SD.open(_currentSDFileName, FILE_APPEND);
@@ -172,8 +197,31 @@ void DataManager::logDataSD(const RawFlightData& data) {
     _sdRecordCounter++;
     if (_sdRecordCounter >= LOG_SYNC_INTERVAL) {
         _logFile.close();
-        DEBUG_PRINTLN_F("SD: Data saved."); 
+        
+        _sdLEDCounter++;
+        if (_sdLEDCounter >= 5) {
+            _sdLEDCounter = 0;
+            // Non-blocking toggle
+            digitalWrite(PIN_LED_2, !digitalRead(PIN_LED_2)); 
+        }
+
+        // static uint32_t lastSaveTime = 0;
+        // uint32_t now = millis();
+        // DEBUG_PRINT_F("SD: Data saved. dt: ");  DEBUG_PRINT(now - lastSaveTime); DEBUG_PRINTLN_F(" ms");
+        // lastSaveTime = now;
         _sdRecordCounter = 0;
+    }
+
+    // Check for Timeout
+    uint32_t duration = millis() - startTime;
+    if (duration > _sdWriteTimeoutMs) {
+        DEBUG_PRINT_F("SD: Write Timeout! Duration: "); DEBUG_PRINT(duration); DEBUG_PRINTLN_F(" ms");
+        DEBUG_PRINTLN_F("SD: Disabling Logging for Safety.");
+        
+        // Force close if still open to try and save state, then disable
+        if (_logFile) _logFile.close();
+        _loggingActive = false;
+        _sdAvailable = false;
     }
 }
 

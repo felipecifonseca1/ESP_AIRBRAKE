@@ -59,13 +59,13 @@ void FlightController::setupKalman() {
   _H_kf << 1, 0,
            0, 1; // ZUKF velocity 
 
-  float var_proc_pos = 1.0f;
-  float var_proc_vel = 3.0f;
+  float var_proc_pos = KALMAN_VAR_PROC_POS;
+  float var_proc_vel = KALMAN_VAR_PROC_VEL;
   _Q_kf << var_proc_pos * (Ts * Ts * Ts * Ts) / 4.0, var_proc_pos * (Ts * Ts * Ts) / 2, 
            var_proc_pos * (Ts * Ts * Ts) / 2,        var_proc_vel * Ts * Ts;
 
-  float var_med_alt = 1.0f; // Standard variance for altitude measurement
-  float var_zupt_vel = 0.000001f; // Very low variance for ZUPT velocity measurement
+  float var_med_alt = KALMAN_VAR_MEAS_ALT; // Standard variance for altitude measurement
+  float var_zupt_vel = KALMAN_VAR_ZUPT_VEL; // Very low variance for ZUPT velocity measurement
 
   _R_kf << var_med_alt, 0, 0, var_zupt_vel;
 
@@ -200,7 +200,7 @@ void FlightController::updateLogger(RawFlightData &data) {
   data.airbrakeDeployment = _airbrakeDeployment * 100;
   data.gain1 = _controlGain1;
   data.gain2 = _controlGain2;
-  data.flightState = static_cast<int>(_flightState);
+  data.flightState = static_cast<uint8_t>(_flightState);
 }
 
 /**
@@ -365,8 +365,7 @@ void FlightController::burnoutLoop() {
   DEBUG_PRINTLN_F("m/s");
 
   if (detectAirbrakesActuation(_filteredAltitude, _filteredVerticalVelocity)) {
-    DEBUG_PRINTLN_F(
-        "Appropriate speed detected, initiating airbrake actuation.");
+    DEBUG_PRINTLN_F("Appropriate speed detected, initiating airbrake actuation.");
     _flightState = FlightState::AIRBRAKE_DEPLOYMENT;
     _stateEntryTime = millis();
   }
@@ -445,8 +444,7 @@ void FlightController::descentLoop() {
   }
 
   unsigned long tempoDesdeApogeu = millis() - _apogeeDetectedTime;
-  if (detectLanding(_filteredVerticalVelocity, _filteredAltitude,
-                    tempoDesdeApogeu)) {
+  if (detectLanding(_filteredVerticalVelocity, _filteredAltitude, tempoDesdeApogeu)) {
     DEBUG_PRINTLN_F("LANDING DETECTED!");
     _flightState = FlightState::LANDING;
     DataManager::getInstance().setDecimationFactor(50); // Save every 50x20ms = 1s
@@ -478,8 +476,6 @@ void FlightController::landingLoop() {
 
   delay(10000); // Slow down loop in landing
 }
-
-
 
 // --- Specific Methods ---
 
@@ -675,8 +671,7 @@ bool FlightController::detectBurnout(float verticalAcceleration,
  */
 bool FlightController::detectAirbrakesActuation(
     float filteredAltitude, float filteredVerticalVelocity) {
-  if (filteredAltitude > _minActuationHeight &&
-      filteredVerticalVelocity < _velLimitActuation) {
+  if (filteredAltitude > _minActuationHeight && filteredVerticalVelocity < _velLimitActuation) {
     DEBUG_PRINTLN_F("FLIGHT_LOGIC: Conditions for airbrake actuation met.");
     return true;
   }
