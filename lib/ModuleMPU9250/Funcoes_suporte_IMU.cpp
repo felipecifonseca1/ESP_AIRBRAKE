@@ -102,7 +102,7 @@ void loadCalibration(bool print) {
 bool hasCalibrationDataIMU() {
     float test_value;
     EEPROM.get(0, test_value);
-    DEBUG_PRINT_F("DEBUG_CALIB: Read value from EEPROM[0]: "); DEBUG_PRINTLN(test_value, 6);
+    // DEBUG_PRINT_F("DEBUG_CALIB: Read value from EEPROM[0]: "); DEBUG_PRINTLN(test_value, 6);
     return !isnan(test_value);  
 }
 
@@ -578,6 +578,7 @@ float computeNetAcceleration(bool print_debug, float ax_input, float ay_input, f
 
     // Remove gravity and convert to m/s^2
     float netVerticalAcceleration_ms2 = -(worldZAcceleration - 1.0f) * G_GRAVITATIONAL_CONSTANT;
+    // float netVerticalAcceleration_ms2 = (worldZAcceleration - 1.0f) * G_GRAVITATIONAL_CONSTANT;
     
     // Remove small vibrations
     if (abs(netVerticalAcceleration_ms2) < 0.2f) { 

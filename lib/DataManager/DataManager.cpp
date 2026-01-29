@@ -53,8 +53,6 @@ bool DataManager::setupSD() {
         // CSV Header
         _logFile.println("Time[ms],AccX[g],AccY[g],AccZ[g],GyroX[°/s],GyroY[°/s],GyroZ[°/s],MagX[uT],MagY[uT],MagZ[uT],qW,qX,qY,qZ,AltFilt[m],VelFilt[m/s],AccVert[m/s^2],Tilt[°],PressBMP[Pa],Servo[%],PID_Gain,Cd_Gain,Estado");
         
-        // If interval is small (e.g. 1), we close it immediately to be safe.
-        // If interval is larger, we can leave it open for speed.
         if (LOG_SYNC_INTERVAL <= 1) {
             _logFile.close();
             DEBUG_PRINTLN_F("SD: File created and closed (Safe Mode).");

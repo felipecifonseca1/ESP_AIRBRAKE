@@ -13,6 +13,10 @@
 
 using namespace Eigen;
 
+// --- RTC Memory Backup ---
+static RTC_NOINIT_ATTR FlightRecoveryData _rtcBackup;
+static const uint32_t RTC_MAGIC = 0xABBA1234; 
+
 /**
  * @brief Gets the singleton instance of the FlightController.
  * @return Reference to the FlightController instance.
@@ -135,11 +139,25 @@ void FlightController::runStateEstimator() {
         _netVerticalAcceleration = computeNetAcceleration(false, -accX_g, accY_g, accZ_g, false);
         _tilt = readCurrentTilt();
       }
+
+      // DEBUG HIL ACCELERATION
+      if (motor_on || _flightState == FlightState::AIRBRAKE_DEPLOYMENT) {
+           static int hil_debug_prescaler = 0;
+           if (hil_debug_prescaler++ > 25) { // Print every ~0.5s
+               DEBUG_PRINT_F("[HIL DEBUG] AccZ_Input: "); DEBUG_PRINT(accZ_g);
+               DEBUG_PRINT_F(" g | NetAcc: "); DEBUG_PRINT(_netVerticalAcceleration);
+               DEBUG_PRINTLN_F(" m/s^2");
+               hil_debug_prescaler = 0;
+           }
+      }
     } else {
       // Simple HIL mode
       _netVerticalAcceleration = hilData.netVerticalAcceleration_ms2;
       _tilt = 90 - hilData.tilt; // Convert tilt to match system definition
     }
+    
+
+
   } else {
     // --- Real Mode: Read data from sensors ---
     if (!mpu.update(Ts, motor_on)) {
@@ -209,6 +227,22 @@ void FlightController::updateLogger(RawFlightData &data) {
 void FlightController::update() {
   
   runStateEstimator(); // Get full state estimation from Kalman Filter and Madgwick Filter
+
+  // --- Recovery System Update ---
+  static FlightState lastState = FlightState::SENSOR_CALIBRATION;
+  static uint32_t lastRTCSave = 0;
+  
+  // Save on state change
+  if (_flightState != lastState) {
+    saveStateToRTC();
+    lastState = _flightState;
+  }
+  // Save periodically (every 100ms)
+  else if (millis() - lastRTCSave > 100) {
+    saveStateToRTC();
+    lastRTCSave = millis();
+  }
+  // ------------------------------
 
   switch (_flightState) {
     case FlightState::SENSOR_CALIBRATION:
@@ -488,6 +522,7 @@ void FlightController::forceState(FlightState newState) {
     _stateEntryTime = millis();
     DEBUG_PRINT_F("FlightState Forced to: ");
     DEBUG_PRINTLN((int)_flightState);
+    saveStateToRTC(); // Update backup
 
     if (_flightState == FlightState::WAIT_LAUNCH) {
         DataManager::getInstance().startLogging(); 
@@ -608,10 +643,8 @@ bool FlightController::checkFlightSystemHealth(float filteredAltitude,
  * @param filteredAltitude Filtered altitude in meters.
  * @return true if launch is detected, false otherwise.
  */
-bool FlightController::detectLaunch(float verticalAcceleration,
-                                    float filteredAltitude) {
-  if (verticalAcceleration > _accelLimitLaunch ||
-      filteredAltitude > _heightLimitLaunch) {
+bool FlightController::detectLaunch(float verticalAcceleration,float filteredAltitude) {
+  if (abs(verticalAcceleration) > _accelLimitLaunch || filteredAltitude > _heightLimitLaunch) {
     DEBUG_PRINTLN_F("FLIGHT_LOGIC: Launch detected!");
     return true;
   }
@@ -625,8 +658,7 @@ bool FlightController::detectLaunch(float verticalAcceleration,
  * @param timeSinceLaunch Time since launch in milliseconds.
  * @return true if burnout is detected, false otherwise.
  */
-bool FlightController::detectBurnout(float verticalAcceleration,
-                                     unsigned long timeSinceLaunch) {
+bool FlightController::detectBurnout(float verticalAcceleration,unsigned long timeSinceLaunch) {
   // Update moving average buffer
   _burnoutMovingSum -= _burnoutBufferAcc[_burnoutIndexHead];
   _burnoutBufferAcc[_burnoutIndexHead] = verticalAcceleration;
@@ -649,8 +681,7 @@ bool FlightController::detectBurnout(float verticalAcceleration,
   }
 
   // Check burnout condition
-  if (timeSinceLaunch > _minMotorBurnTime &&
-      movingAverageAcc < _accelLimitBurnout) {
+  if (timeSinceLaunch > _minMotorBurnTime && abs(movingAverageAcc) < _accelLimitBurnout) {
     _burnoutCounter++;
   } else {
     _burnoutCounter = 0;
@@ -669,9 +700,8 @@ bool FlightController::detectBurnout(float verticalAcceleration,
  * @param filteredVerticalVelocity Filtered vertical velocity in m/s.
  * @return true if airbrakes actuation is detected, false otherwise.
  */
-bool FlightController::detectAirbrakesActuation(
-    float filteredAltitude, float filteredVerticalVelocity) {
-  if (filteredAltitude > _minActuationHeight && filteredVerticalVelocity < _velLimitActuation) {
+bool FlightController::detectAirbrakesActuation(float filteredAltitude, float filteredVerticalVelocity) {
+  if (filteredAltitude > _minActuationHeight && abs(filteredVerticalVelocity) < _velLimitActuation) {
     DEBUG_PRINTLN_F("FLIGHT_LOGIC: Conditions for airbrake actuation met.");
     return true;
   }
@@ -684,8 +714,7 @@ bool FlightController::detectAirbrakesActuation(
  * @param filteredAltitude Filtered altitude in meters.
  * @return true if apogee is detected, false otherwise.
  */
-bool FlightController::detectApogee(float filteredVerticalVelocity,
-                                    float filteredAltitude) {
+bool FlightController::detectApogee(float filteredVerticalVelocity,float filteredAltitude) {
   // Update max recorded height
   if (filteredAltitude > _maxRecordedHeight) {
     _maxRecordedHeight = filteredAltitude;
@@ -845,4 +874,57 @@ bool FlightController::detectLanding(float filteredVerticalVelocity,
  */
 float FlightController::readCurrentTilt() {
   return calcTilt(); // From Funcoes_suporte_IMU.h
+}
+
+// --- Recovery System Implementation ---
+void FlightController::saveStateToRTC() {
+  _rtcBackup.magicNumber = RTC_MAGIC;
+  _rtcBackup.state = _flightState;
+  
+  // Save critical reference data
+  _rtcBackup.basePressure = getGroundPressureP0_BMP();
+  _rtcBackup.baseTemperature = getGroundTemperatureT0_BMP();
+  _rtcBackup.maxAltitude = _maxRecordedHeight;
+  
+  _rtcBackup.stateEntryTime = _stateEntryTime;
+  _rtcBackup.timestamp = millis();
+}
+
+void FlightController::resetRecoveryData() {
+  _rtcBackup.magicNumber = 0; // Invalidate
+  _rtcBackup.state = FlightState::WAIT_LAUNCH;
+}
+
+bool FlightController::attemptRecovery() {
+    DEBUG_PRINTLN_F("RECOVERY: Checking for valid RTC backup...");
+    
+    if (_rtcBackup.magicNumber == RTC_MAGIC) {
+        DEBUG_PRINTLN_F("RECOVERY: Valid backup found!");
+        
+        // Restore Critical References FIRST
+        setGroundPressureP0_BMP(_rtcBackup.basePressure);
+        setGroundTemperatureT0_BMP(_rtcBackup.baseTemperature);
+        DEBUG_PRINT_F("RECOVERY: Restored P0: "); DEBUG_PRINT(_rtcBackup.basePressure);
+        DEBUG_PRINT_F(" Pa | State: "); DEBUG_PRINTLN((int)_rtcBackup.state);
+        
+        // Restore State
+        _flightState = _rtcBackup.state;
+        _maxRecordedHeight = _rtcBackup.maxAltitude;
+        
+        // Adjust entry time relative to new millis() (which is small after reboot)
+        // Original duration = stored_timestamp - stored_entryTime
+        uint32_t durationInState = _rtcBackup.timestamp - _rtcBackup.stateEntryTime;
+        if (durationInState > millis()) {
+             // If we were in state longer than current uptime, wrap around logic
+              _stateEntryTime = millis() - durationInState;
+        } else {
+             _stateEntryTime = millis() - durationInState;
+        }
+
+        DEBUG_PRINTLN_F("RECOVERY: State restored successfully.");
+        return true;
+    }
+    
+    DEBUG_PRINTLN_F("RECOVERY: No valid backup or Magic mismatch.");
+    return false;
 }

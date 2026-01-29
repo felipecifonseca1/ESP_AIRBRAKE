@@ -13,7 +13,6 @@
 
 // Forward Declaration
 struct RawFlightData;
-
 // Enum for Flight States
 enum class FlightState {
   SENSOR_CALIBRATION,
@@ -25,6 +24,17 @@ enum class FlightState {
   APOGEE,
   DESCENT,
   LANDING
+};
+
+// Recovery Data Structure (RTC)
+struct FlightRecoveryData {
+    uint32_t magicNumber;       // 0xDEADBEEF
+    FlightState state;          
+    float basePressure;         // P0
+    float baseTemperature;      // T0
+    float maxAltitude;          
+    uint32_t stateEntryTime;    
+    uint32_t timestamp;         // Last save time
 };
 
 class FlightController {
@@ -80,6 +90,11 @@ public:
 
   // --- Debug / HIL ---
   void forceState(FlightState newState);
+
+  // --- Recovery System ---
+  void saveStateToRTC();
+  bool attemptRecovery();
+  void resetRecoveryData();
 
   // --- Setup ---
   void setupController(); // Setup PID limits etc.

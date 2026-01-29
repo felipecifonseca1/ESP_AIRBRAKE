@@ -38,7 +38,7 @@ constexpr bool PHYSICAL_Z_AXIS_DOWN = true; // Defines the orientation of the ph
 constexpr bool ERASE_CALIBRATION_ON_STARTUP = false;
 
 // --- HIL Simulation ---
-constexpr bool HIL_MODE_ACTIVE = false;
+constexpr bool HIL_MODE_ACTIVE = true;
 constexpr char HIL_FILENAME[] = "/Teste_HIL_Sensors_no_bias.csv";
 
 // --- Servo Configuration ---
@@ -59,7 +59,7 @@ constexpr float KALMAN_VAR_ZUPT_VEL = 0.000001f;
 // --- Events Detection ---
 constexpr float LAUNCH_ACCEL_THRESHOLD_G = 1.5f; 
 constexpr uint16_t BURNOUT_MIN_MOTOR_TIME_MS = 5000;
-constexpr float    BURNOUT_ACCEL_THRESHOLD_G = -0.5f;
+constexpr float    BURNOUT_ACCEL_THRESHOLD_G = 0.5f;
 constexpr float APOGEE_VEL_THRESHOLD_MS = 0.5f;
 
 

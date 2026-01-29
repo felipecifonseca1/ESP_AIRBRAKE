@@ -26,9 +26,11 @@
 #include "DataManager.h"
 #include "Sinalizacao.h"
 #include <ArduinoEigenDense.h>
+#include <rom/rtc.h> // For reset reason
+
 #define EEPROM_SIZE 256 // Define EEPROM size
 
-uint32_t WDT_TIMEOUT_MS = 15000; // Watchdog timeout in milliseconds
+uint32_t WDT_TIMEOUT_MS = 10000; // Watchdog timeout in milliseconds
 // Watchdog configuration
 esp_task_wdt_config_t twdt_config = {.timeout_ms = WDT_TIMEOUT_MS,
                                      .idle_core_mask = (1 << 0),
@@ -114,6 +116,17 @@ void TaskSerialComm(void *pvParameters) {
         Serial.println("Command received: Stop Logging");
         logger.stopLogging();
       }
+
+      if (cmd == 'w' || cmd == 'W') {
+        Serial.println("Command received: Software Reset (Simulated Crash in 2s)...");
+        delay(2000); 
+        esp_restart(); 
+      }
+
+      if (cmd == 'b' || cmd == 'B') {
+         Serial.println("Command received: Force Burnout State");
+         flightController.forceState(FlightState::BURNOUT);
+      }
     }
     esp_task_wdt_reset();
     vTaskDelay(pdMS_TO_TICKS(50)); // Poll at 20Hz
@@ -150,6 +163,19 @@ void verifyModule(bool success, const char* moduleName, bool fatal = true) {
     }
 }
 
+// Check reset reason and decide if we are recovering from a crash
+bool checkSystemRecovery() {
+    RESET_REASON reason = rtc_get_reset_reason(0);
+    DEBUG_PRINT_F("BOOT: Reset Reason CPU0: "); DEBUG_PRINTLN(reason);
+  
+    // RTCWDT_RTC_RESET = 1, TG0WDT_SYS_RESET = 8, SW_CPU_RESET = 12, RTCWDT_BROWN_OUT_RESET = 15
+    if (reason == TG0WDT_SYS_RESET || reason == RTCWDT_RTC_RESET || reason == RTCWDT_BROWN_OUT_RESET || reason == SW_CPU_RESET) {
+         DEBUG_PRINTLN_F("BOOT: WATCHDOG/BROWNOUT RESET DETECTED! Attempting Recovery...");
+         return true;
+    }
+    return false;
+}
+
 void setup() {
   Serial.begin(115200);
   // Wait for Serial to connect, with timeout
@@ -163,10 +189,11 @@ void setup() {
     DEBUG_PRINTLN_F("CRITICAL ERROR: Failed to initialize EEPROM!");
   } else {
     DEBUG_PRINTLN_F("EEPROM initialized successfully.");
-    if (ERASE_CALIBRATION_ON_STARTUP) {
-      eraseCalibration(); // First time calibration
-    }
   }
+
+  // Recovery check
+  bool isCrashRecovery = checkSystemRecovery();
+  bool recoverySuccess = false;
 
   // Initialize basics: I2C, SPI and signaling system
   Wire.begin();
@@ -190,7 +217,13 @@ void setup() {
   verifyModule(logger.setupSD(), "SD Card", false);
 
   // IMU Setup
-  verifyModule(setup_IMU(CALIBRATE_IMU_ON_STARTUP, PERFORM_FINE_TUNING, PRINT_IMU_PARAMS), "IMU");
+  if (isCrashRecovery) {
+      DEBUG_PRINTLN_F("BOOT: Skipping IMU Calibration for Recovery.");
+      verifyModule(setup_IMU(false, false, false), "IMU"); // No Calib, No FineTune, No Print
+  } else {
+      if (ERASE_CALIBRATION_ON_STARTUP) eraseCalibration(); // Moved here logic
+      verifyModule(setup_IMU(CALIBRATE_IMU_ON_STARTUP, PERFORM_FINE_TUNING, PRINT_IMU_PARAMS), "IMU");
+  }
 
   // Sensors or HIL setup
   if (HIL_MODE_ACTIVE) {
@@ -223,15 +256,34 @@ void setup() {
 
   } else {
     DEBUG_PRINTLN_F("Initializing BMP (setup_BMP)...");
-    verifyModule(setupBMP(), "BMP280");
-    DEBUG_PRINTLN_F("**** REAL FLIGHT MODE ACTIVATED ****");
+    verifyModule(setupBMP(), "BMP280"); // Reads P0
+    
+    // If Recovering, overwrite P0 from RTC
+    if (isCrashRecovery) {
+       if (flightController.attemptRecovery()) {
+           recoverySuccess = true;
+           DEBUG_PRINTLN_F("BOOT: **** FLIGHT RESUMED FROM RTC ****");
+           signalSuccessfullModule("RESUMED");
+           // Skip servo retract
+       } else {
+           DEBUG_PRINTLN_F("BOOT: Recovery failed (Invalid Magic). Normal startup.");
+           isCrashRecovery = false; // Treat as normal
+       }
+    } else {
+        flightController.resetRecoveryData(); // Clear old trash
+    }
+    
+    if (!recoverySuccess) {
+       DEBUG_PRINTLN_F("**** REAL FLIGHT MODE ACTIVATED ****");
+       // Servo Setup
+       verifyModule(flightController.setupServo(), "Servo");
+       flightController.retractAirbrakes();
+       delay(500); 
+    } else {
+       // Just attach servo, don't move it
+       flightController.setupServo(); 
+    }
   }
-
-  // Servo Setup
-  verifyModule(flightController.setupServo(), "Servo");
-  flightController.retractAirbrakes();
-
-  delay(500); // Time to stabilize data
 
   DEBUG_PRINTLN_F("Initializing Controller...");
   flightController.setupController();
