@@ -2,7 +2,6 @@
 #include "AltitudeSpeedTable.hh"
 #include "DataManager.h"
 #include "FlightController.h"
-#include "Funcoes_BMP.h"
 #include "DataManager.h" 
 #include "DragCoefficientTable.hh"
 #include <Arduino.h>
@@ -19,17 +18,21 @@ static const uint32_t RTC_MAGIC = 0xABBA1234;
 
 /**
  * @brief Gets the singleton instance of the FlightController.
+ * @attention The very first time this is called in setup(), the BarometricSensor pointer must be provided.
  * @return Reference to the FlightController instance.
  */
-FlightController &FlightController::getInstance() {
-  static FlightController instance;
+FlightController &FlightController::getInstance(BarometricSensor* b) {
+  static FlightController instance(b);
+  if (b != nullptr) {
+      instance.baro = b;
+  }
   return instance;
 }
 
 /**
  * @brief Constructor. Initializes the PID controller and resets buffers.
  */
-FlightController::FlightController(): _controller(PID_KP, PID_KI, PID_KD, ROCKET_MASS_KG, ROCKET_AREA_M2, Ts){ // Initialize PID Controller using global constants
+FlightController::FlightController(BarometricSensor* b): baro(b), _controller(PID_KP, PID_KI, PID_KD, ROCKET_MASS_KG, ROCKET_AREA_M2, Ts){ // Initialize PID Controller using global constants
 
   // Initialize buffers
   for (int i = 0; i < _burnoutWindowSize; i++)
@@ -155,7 +158,7 @@ void FlightController::runStateEstimator() {
     }
 
     _netVerticalAcceleration = computeNetAcceleration(false);
-    _barometricPressure = getPressaoBMPAtual();
+    _barometricPressure = baro->getPressurePa();
     _tilt = readCurrentTilt();
   }
 
@@ -164,7 +167,7 @@ void FlightController::runStateEstimator() {
   U_kf << _netVerticalAcceleration;
   _kf.Predict(U_kf);
 
-  float measuredAltitude_m = altitudeFromPressure(_barometricPressure);
+  float measuredAltitude_m = baro->altitudeFromPressure(_barometricPressure);
 
   if (measuredAltitude_m > -9000.0f) {
     Eigen::Matrix<float, 2, 1> Z_kf;
@@ -274,7 +277,7 @@ void FlightController::update() {
 void FlightController::calibrationCheckLoop() {
   DEBUG_PRINTLN_F("STATE: Sensor Calibration");
 
-  if (hasCalibrationDataIMU() && getGroundPressureP0_BMP() != 101324.0f) {
+  if (hasCalibrationDataIMU() && baro->getGroundPressureP0() != 101325.0f) {
     DEBUG_PRINTLN_F("Initial calibration (IMU/BMP P0) done in setup.");
     _flightState = FlightState::HEALTH_CHECK;
     _stateEntryTime = millis();
@@ -287,7 +290,7 @@ void FlightController::calibrationCheckLoop() {
 void FlightController::healthCheckLoop() {
   DEBUG_PRINTLN_F("State: Health Check");
 
-  recalibrateGroundPressure(_barometricPressure);
+  baro->recalibrateGroundPressure(_barometricPressure);
 
   if (checkFlightSystemHealth(_filteredAltitude, _filteredVerticalVelocity)) {
     _healthCheckCount++;
@@ -322,18 +325,18 @@ void FlightController::healthCheckLoop() {
 void FlightController::waitLaunchLoop() {
   _loopPrintCounter++;
 
-  recalibrateGroundPressure(_barometricPressure);
+  baro->recalibrateGroundPressure(_barometricPressure);
 
   if (_loopPrintCounter > _printCountLimit) {
-    DEBUG_PRINT_F("STATE: WAIT_LAUNCH | Alt: ");
-    DEBUG_PRINT(_filteredAltitude);
-    DEBUG_PRINT_F("m | VelZ: ");
-    DEBUG_PRINT(_filteredVerticalVelocity);
-    DEBUG_PRINT_F("m/s | AccelZ: ");
-    DEBUG_PRINT(_netVerticalAcceleration);
-    DEBUG_PRINT_F("m/s^2 | Tilt: ");
-    DEBUG_PRINT(_tilt);
-    DEBUG_PRINTLN_F("deg");
+    PRINT_STATE("WAIT_LAUNCH");
+    PLOT_VAR("Alt", _filteredAltitude);
+    PLOT_VAR("VelZ", _filteredVerticalVelocity);
+    PLOT_VAR("AccelZ", _netVerticalAcceleration);
+    PLOT_VAR("Tilt", _tilt);
+#if USE_TELEPLOT == 0
+    DEBUG_PRINTLN(); // Add a newline at the end only if we are printing on one line
+#endif
+    printFullTelemetry();
     _loopPrintCounter = 0;
   }
 
@@ -357,13 +360,14 @@ void FlightController::waitLaunchLoop() {
 void FlightController::motorOnLoop() {
   _loopPrintCounter++;
   if (_loopPrintCounter > _printCountLimit) {
-    DEBUG_PRINT_F("STATE: MOTOR_ON | Alt: ");
-    DEBUG_PRINT(_filteredAltitude);
-    DEBUG_PRINT_F("m | VelZ: ");
-    DEBUG_PRINT(_filteredVerticalVelocity);
-    DEBUG_PRINT_F("m/s | Tilt: ");
-    DEBUG_PRINT(_tilt);
-    DEBUG_PRINTLN_F("deg");
+    PRINT_STATE("MOTOR_ON");
+    PLOT_VAR("Alt", _filteredAltitude);
+    PLOT_VAR("VelZ", _filteredVerticalVelocity);
+    PLOT_VAR("Tilt", _tilt);
+#if USE_TELEPLOT == 0
+    DEBUG_PRINTLN(); // Add a newline at the end only if we are printing on one line
+#endif
+    printFullTelemetry();
     _loopPrintCounter = 0;
   }
 
@@ -380,11 +384,13 @@ void FlightController::motorOnLoop() {
  * @brief Loop for BURNOUT state. Waits for conditions to deploy airbrakes.
  */
 void FlightController::burnoutLoop() {
-  DEBUG_PRINT_F("STATE: Burnout | Alt: ");
-  DEBUG_PRINT(_filteredAltitude);
-  DEBUG_PRINT_F("m | VelZ: ");
-  DEBUG_PRINT(_filteredVerticalVelocity);
-  DEBUG_PRINTLN_F("m/s");
+  PRINT_STATE("Burnout");
+  PLOT_VAR("Alt", _filteredAltitude);
+  PLOT_VAR("VelZ", _filteredVerticalVelocity);
+#if USE_TELEPLOT == 0
+  DEBUG_PRINTLN(); // Add a newline at the end only if we are printing on one line
+#endif
+  printFullTelemetry();
 
   if (detectAirbrakesActuation(_filteredAltitude, _filteredVerticalVelocity)) {
     DEBUG_PRINTLN_F("Appropriate speed detected, initiating airbrake actuation.");
@@ -399,14 +405,15 @@ void FlightController::burnoutLoop() {
 void FlightController::airbrakeDeploymentLoop() {
   _loopPrintCounter++;
   if (_loopPrintCounter > _printCountLimit) {
-    DEBUG_PRINT_F("STATE: AIRBRAKE_DEPLOYMENT | Alt: ");
-    DEBUG_PRINT(_filteredAltitude);
-    DEBUG_PRINT_F("m | VelZ: ");
-    DEBUG_PRINT(_filteredVerticalVelocity);
-    DEBUG_PRINT_F("m/s | Tilt: ");
-    DEBUG_PRINT(_tilt);
-    DEBUG_PRINT_F("deg | Computed Deflection: ");
-    DEBUG_PRINTLN(_airbrakeDeployment);
+    PRINT_STATE("AIRBRAKE_DEPLOYMENT");
+    PLOT_VAR("Alt", _filteredAltitude);
+    PLOT_VAR("VelZ", _filteredVerticalVelocity);
+    PLOT_VAR("Tilt", _tilt);
+    PLOT_VAR("Deflection", _airbrakeDeployment);
+#if USE_TELEPLOT == 0
+    DEBUG_PRINTLN(); // Add a newline at the end only if we are printing on one line
+#endif
+    printFullTelemetry();
     _loopPrintCounter = 0;
   }
 
@@ -439,9 +446,12 @@ void FlightController::airbrakeDeploymentLoop() {
  * @brief Loop for APOGEE state. Retracts airbrakes and transitions to descent.
  */
 void FlightController::apogeeLoop() {
-  DEBUG_PRINT_F("STATE: APOGEE | Max Alt: ");
-  DEBUG_PRINT(_filteredAltitude);
-  DEBUG_PRINTLN_F("m");
+  PRINT_STATE("APOGEE");
+  PLOT_VAR("Max_Alt", _filteredAltitude);
+#if USE_TELEPLOT == 0
+  DEBUG_PRINTLN(); // Add a newline at the end only if we are printing on one line
+#endif
+  printFullTelemetry();
 
   retractAirbrakes();
   DEBUG_PRINTLN_F("Airbrakes retracted at apogee.");
@@ -457,11 +467,13 @@ void FlightController::apogeeLoop() {
 void FlightController::descentLoop() {
   _loopPrintCounter++;
   if (_loopPrintCounter > _printCountLimit) {
-    DEBUG_PRINT_F("STATE: DESCENT | Alt: ");
-    DEBUG_PRINT(_filteredAltitude);
-    DEBUG_PRINT_F("m | VelZ: ");
-    DEBUG_PRINT(_filteredVerticalVelocity);
-    DEBUG_PRINTLN_F("m/s");
+    PRINT_STATE("DESCENT");
+    PLOT_VAR("Alt", _filteredAltitude);
+    PLOT_VAR("VelZ", _filteredVerticalVelocity);
+#if USE_TELEPLOT == 0
+    DEBUG_PRINTLN(); // Add a newline at the end only if we are printing on one line
+#endif
+    printFullTelemetry();
     _loopPrintCounter = 0;
   }
 
@@ -896,12 +908,9 @@ float FlightController::readCurrentTilt() {
 void FlightController::saveStateToRTC() {
   _rtcBackup.magicNumber = RTC_MAGIC;
   _rtcBackup.state = _flightState;
-  
-  // Save critical reference data
-  _rtcBackup.basePressure = getGroundPressureP0_BMP();
-  _rtcBackup.baseTemperature = getGroundTemperatureT0_BMP();
+  _rtcBackup.basePressure = baro->getGroundPressureP0();
+  _rtcBackup.baseTemperature = baro->getGroundTemperatureT0();
   _rtcBackup.maxAltitude = _maxRecordedHeight;
-  
   _rtcBackup.stateEntryTime = _stateEntryTime;
   _rtcBackup.timestamp = millis();
 }
@@ -918,10 +927,17 @@ bool FlightController::attemptRecovery() {
         DEBUG_PRINTLN_F("RECOVERY: Valid backup found!");
         
         // Restore Critical References FIRST
-        setGroundPressureP0_BMP(_rtcBackup.basePressure);
-        setGroundTemperatureT0_BMP(_rtcBackup.baseTemperature);
-        DEBUG_PRINT_F("RECOVERY: Restored P0: "); DEBUG_PRINT(_rtcBackup.basePressure);
-        DEBUG_PRINT_F(" Pa | State: "); DEBUG_PRINTLN((int)_rtcBackup.state);
+        // Only restore P0/T0 if not in calibration/health check states
+        if (_flightState != FlightState::SENSOR_CALIBRATION && 
+            _flightState != FlightState::HEALTH_CHECK) {
+            baro->setGroundPressureP0(_rtcBackup.basePressure);
+            baro->setGroundTemperatureT0(_rtcBackup.baseTemperature);
+            DEBUG_PRINT_F("RECOVERY: Restored P0: "); DEBUG_PRINT(_rtcBackup.basePressure);
+            DEBUG_PRINT_F(" Pa | T0: "); DEBUG_PRINT(_rtcBackup.baseTemperature);
+            DEBUG_PRINTLN_F(" C");
+        } else {
+            DEBUG_PRINTLN_F("RECOVERY: Skipping P0/T0 restore due to current state.");
+        }
         
         // Restore State
         _flightState = _rtcBackup.state;
@@ -940,7 +956,32 @@ bool FlightController::attemptRecovery() {
         DEBUG_PRINTLN_F("RECOVERY: State restored successfully.");
         return true;
     }
-    
     DEBUG_PRINTLN_F("RECOVERY: No valid backup or Magic mismatch.");
     return false;
+}
+
+/**
+ * @brief Prints the full telemetry payload to standard serial for plotting
+ */
+void FlightController::printFullTelemetry() {
+#if USE_TELEPLOT == 2
+  PLOT_VAR("AccX", mpu.getAccX());
+  PLOT_VAR("AccY", mpu.getAccY());
+  PLOT_VAR("AccZ", mpu.getAccZ());
+  PLOT_VAR("GyroX", mpu.getGyroX());
+  PLOT_VAR("GyroY", mpu.getGyroY());
+  PLOT_VAR("GyroZ", mpu.getGyroZ());
+  PLOT_VAR("MagX", mpu.getMagX() / 10.0f);
+  PLOT_VAR("MagY", mpu.getMagY() / 10.0f);
+  PLOT_VAR("MagZ", mpu.getMagZ() / 10.0f);
+  PLOT_VAR("qW", mpu.getQuaternionW());
+  PLOT_VAR("qX", mpu.getQuaternionX());
+  PLOT_VAR("qY", mpu.getQuaternionY());
+  PLOT_VAR("qZ", mpu.getQuaternionZ());
+  PLOT_VAR("Press", _barometricPressure); // Pa
+  PLOT_VAR("Servo", _airbrakeDeployment * 100.0f); // %
+  PLOT_VAR("Gain1", _controlGain1);
+  PLOT_VAR("Gain2", _controlGain2);
+  PLOT_VAR("FlightState", (uint8_t)_flightState);
+#endif
 }

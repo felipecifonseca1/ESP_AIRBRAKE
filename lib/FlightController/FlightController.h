@@ -8,6 +8,7 @@
 #include <ArduinoEigenDense.h>
 #include <ESP32Servo.h>
 #include <cstdint>
+#include "BarometricSensor.h"
 
 
 
@@ -40,7 +41,7 @@ struct FlightRecoveryData {
 class FlightController {
 public:
   // Singleton access
-  static FlightController &getInstance();
+  static FlightController &getInstance(BarometricSensor* b = nullptr);
 
   // --- Main Update Loop ---
   /**
@@ -88,6 +89,9 @@ public:
 
   float getControlGain2() const { return _controlGain2; }
 
+  // --- Telemetry ---
+  void printFullTelemetry();
+
   // --- Debug / HIL ---
   void forceState(FlightState newState);
 
@@ -101,7 +105,8 @@ public:
 
 private:
   // Private constructor for Singleton
-  FlightController();
+  FlightController(BarometricSensor* b);
+  BarometricSensor* baro;
 
   // Delete copy constructor and assignment operator
   FlightController(const FlightController &) = delete;

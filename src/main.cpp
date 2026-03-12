@@ -18,7 +18,7 @@
 
 // Modules
 #include "FlightController.h"
-#include "Funcoes_BMP.h"
+#include "BMP280_HAL.h"
 #include "Funcoes_suporte_IMU.h"
 #include "KalmanFilter.hh"
 
@@ -38,7 +38,13 @@ esp_task_wdt_config_t twdt_config = {.timeout_ms = WDT_TIMEOUT_MS,
 
 // Flight State & Data
 RawFlightData flightData;
-FlightController &flightController = FlightController::getInstance();
+
+// --- Hardware Instantiation ---
+BMP280_HAL flightBaro(0x76); 
+
+// --- Dependency Injection ---
+FlightController &flightController = FlightController::getInstance(&flightBaro);
+
 
 // --- FreeRTOS Handles ---
 QueueHandle_t flightDataQueue;
@@ -231,7 +237,7 @@ void setup() {
 
       if (firstSample.valid) {
         float pressaoInicial = firstSample.barometricPressure_Pa;
-        setGroundPressureP0_BMP(pressaoInicial);
+        flightBaro.setGroundPressureP0(pressaoInicial);
 
         DEBUG_PRINT_F("HIL: P0 set to: ");
         DEBUG_PRINT(pressaoInicial);
@@ -252,8 +258,9 @@ void setup() {
     }
 
   } else {
-    DEBUG_PRINTLN_F("Initializing BMP (setup_BMP)...");
-    verifyModule(setupBMP(), "BMP280"); // Reads P0
+    DEBUG_PRINTLN_F("Initializing BMP...");
+    verifyModule(flightBaro.init(), "BMP280"); 
+    flightBaro.calibrateGroundReference(100); // Reads n amount of times for P0
     
     // If Recovering, overwrite P0 from RTC
     if (isCrashRecovery) {

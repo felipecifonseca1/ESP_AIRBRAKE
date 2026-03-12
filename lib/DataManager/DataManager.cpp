@@ -35,6 +35,12 @@ DataManager::DataManager() :
  */
 bool DataManager::setupSD() {
     
+    if (!ENABLE_DATA_LOGGING) {
+        DEBUG_PRINTLN_F("SD: Logging disabled by configuration.");
+        _sdAvailable = false;
+        return true; 
+    }
+
     if (!ensureSDConnection()) {
         DEBUG_PRINTLN_F("SD: ERROR - Failed to mount card!");
         _sdAvailable = false;
@@ -89,8 +95,12 @@ bool DataManager::setupFlash(bool eraseArea) {
  * @brief Starts general logging.
  */
 void DataManager::startLogging() {
-    _loggingActive = true;
-    DEBUG_PRINTLN_F("LOG: Initialized.");
+    if (ENABLE_DATA_LOGGING) {
+        _loggingActive = true;
+        DEBUG_PRINTLN_F("LOG: Initialized.");
+    } else {
+        DEBUG_PRINTLN_F("LOG: Disabled by configuration.");
+    }
 }
 
 /**
@@ -525,6 +535,13 @@ void DataManager::dumpCurrentLog() {
         Serial.println("No file name registered to read.");
         return;
     } 
+  
+  // We don't have direct access to P0 here easily without passing the BarometricSensor. 
+  // For telemetry dump, it's better to just log the raw pressure or passing P0 in RawFlightData.
+  // For now, I will comment this out to fix the build. In a future refactor, P0 should be part of RawFlightData.
+  // Serial.print("Ground Pressure (P0): ");
+  // Serial.print(getGroundPressureP0_BMP());
+  // Serial.println(" Pa");
     if (!ensureSDConnection()) {
         Serial.println("Error: SD card not accessible.");
         return;

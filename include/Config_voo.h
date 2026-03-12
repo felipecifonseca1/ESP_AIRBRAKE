@@ -30,7 +30,7 @@ constexpr float apoggeTargetAltitude_m = 3254.0f; // Apogee target altitude in m
 constexpr float maxTiltAngle = 20.0f;             // Maximum tilt angle in degrees
 constexpr uint8_t LOG_SYNC_INTERVAL = 1;          // 1  = Safe Mode | 10 = Balanced | 50 = Fast
 constexpr bool useRecovery = false;               // Use recovery system
-
+constexpr bool ENABLE_DATA_LOGGING = false;       // Set to false to disable SD card data logging and file creation during testing
 // --- IMU Configuration ---
 constexpr bool CALIBRATE_IMU_ON_STARTUP = false;
 constexpr bool PRINT_IMU_PARAMS = false;
@@ -97,5 +97,16 @@ constexpr float APOGEE_VEL_THRESHOLD_MS = 0.5f;
     #define DEBUG_PRINTF(fmt, ...)
 #endif // DEBUG_SERIAL_ENABLED
 
+
+// --- Teleplot Configuration ---
+#define USE_TELEPLOT 2 // 2 = Full Teleplot | 1 = Basic Teleplot | 0 = Standard Arduino Serial Monitor
+
+#if USE_TELEPLOT >= 1
+    #define PRINT_STATE(stateName) DEBUG_PRINTLN_F("STATE: " stateName)
+    #define PLOT_VAR(name, val) DEBUG_PRINT_F(">"); DEBUG_PRINT_F(name); DEBUG_PRINT_F(":"); DEBUG_PRINTLN(val)
+#else
+    #define PRINT_STATE(stateName) DEBUG_PRINT_F("STATE: " stateName " | ")
+    #define PLOT_VAR(name, val) DEBUG_PRINT_F(name); DEBUG_PRINT_F(": "); DEBUG_PRINT(val); DEBUG_PRINT_F(" | ")
+#endif
 
 #endif // CONFIG_VOO_H
