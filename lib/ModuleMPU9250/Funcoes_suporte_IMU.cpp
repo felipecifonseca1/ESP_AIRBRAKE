@@ -396,7 +396,7 @@ bool setup_IMU(bool calibrate_if_needed, bool perform_fine_tuning_on_calib, bool
     mpuConfig.accel_dlpf_cfg = ACCEL_DLPF_CFG::DLPF_45HZ;
     // Configure magnetic declination (examples: Sp:-21.46, Pira:-21.47, Midland: 5.32, Munchen: 4.27)
     // CHANGE FOR COMPETITION if needed
-    mpu.setMagneticDeclination(4.6); // Adjust according to your actual launch location
+    mpu.setMagneticDeclination(-21.46); // Adjust according to your actual launch location
 
     // Apply the initial flight configuration
     if (!mpu.setup(0x68, mpuConfig)) { 

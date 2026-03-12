@@ -30,10 +30,10 @@
 
 #define EEPROM_SIZE 256 // Define EEPROM size
 
-uint32_t WDT_TIMEOUT_MS = 10000; // Watchdog timeout in milliseconds
+uint32_t WDT_TIMEOUT_MS = 5000; // Watchdog timeout in milliseconds
 // Watchdog configuration
 esp_task_wdt_config_t twdt_config = {.timeout_ms = WDT_TIMEOUT_MS,
-                                     .idle_core_mask = (1 << 0),
+                                     .idle_core_mask = (1 << 1), // Watch Core 1 idle task, ignore Core 0
                                      .trigger_panic = true};
 
 // Flight State & Data
@@ -192,7 +192,10 @@ void setup() {
   }
 
   // Recovery check
-  bool isCrashRecovery = checkSystemRecovery();
+  bool isCrashRecovery = false;
+  if (useRecovery) {
+    isCrashRecovery = checkSystemRecovery();
+  }
   bool recoverySuccess = false;
 
   // Initialize basics: I2C, SPI and signaling system
@@ -202,14 +205,8 @@ void setup() {
   setupSinalizacao();
   signalStartupStart();
 
-
-
   // Create the Data Queue
   flightDataQueue = xQueueCreate(20, sizeof(RawFlightData));
-
-  // Benchmark the SD card 
-  // DataManager::getInstance().runFrequencyTest(16000000, 50, 1000, false);
-  // DataManager::getInstance().runStrategyBenchmark(16000000, 1000);
 
   // Storage setup
   DEBUG_PRINTLN_F("Initializing SD card...");

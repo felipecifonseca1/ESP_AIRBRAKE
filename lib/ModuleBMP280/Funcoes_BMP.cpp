@@ -129,9 +129,7 @@ void setGroundTemperatureT0_BMP(float t0) {
  *          the ground pressure reference (P0) using a simple exponential moving average
  *         filter to smooth out short-term fluctuations.
  */
-void recalibrateGroundPressure() {
-
-    float currentPressure_pa = bmp_sensor_obj.readPressure();
+void recalibrateGroundPressure(float currentPressure_pa) {
     if (currentPressure_pa <= 0 || isnan(currentPressure_pa)) {
         return; 
     }

@@ -90,7 +90,7 @@ public:
     bool isLoggingActive() const { return _loggingActive; }
     void setDecimationFactor(uint16_t factor);
     void closeSDCard(); 
-
+    
     // --- Core logging logic ---
 
     void logDataSD(const RawFlightData& data);

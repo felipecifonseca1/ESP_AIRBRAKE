@@ -158,6 +158,8 @@ private:
   const uint16_t _servoMinPulse = SERVO_MIN_PULSE;  // 0 deg
   const uint16_t _servoMaxPulse = SERVO_MAX_PULSE; // 90 deg
   bool _testServo = false;
+  uint8_t _servoTestStep = 0;
+  uint32_t _servoTestLastTime = 0;
 
   // Launch Detection Constants
   const float _accelLimitLaunch = LAUNCH_ACCEL_THRESHOLD_G * G_GRAVITATIONAL_CONSTANT;

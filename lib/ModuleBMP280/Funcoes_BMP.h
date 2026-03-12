@@ -8,7 +8,7 @@
 bool setupBMP();
 float readAltitude();
 float altitudeFromPressure(float pressao_pa);
-void recalibrateGroundPressure();
+void recalibrateGroundPressure(float currentPressure_pa);
 void setGroundPressureP0_BMP(float p0);
 void setGroundTemperatureT0_BMP(float t0);
 

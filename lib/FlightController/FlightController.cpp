@@ -29,7 +29,7 @@ FlightController &FlightController::getInstance() {
 /**
  * @brief Constructor. Initializes the PID controller and resets buffers.
  */
-FlightController::FlightController(): _controller(_Kp, _Ki, _Kd, _mass_kg, _area_m2, _Ts){ // Initialize PID Controller
+FlightController::FlightController(): _controller(PID_KP, PID_KI, PID_KD, ROCKET_MASS_KG, ROCKET_AREA_M2, Ts){ // Initialize PID Controller using global constants
 
   // Initialize buffers
   for (int i = 0; i < _burnoutWindowSize; i++)
@@ -121,6 +121,7 @@ void FlightController::runStateEstimator() {
       float magZ_mG = hilData.magZ_T * 1e7;
 
       if (PHYSICAL_Z_AXIS_DOWN) {
+     
         if (!mpu.update(Ts, motor_on, false, accX_g, accY_g, -accZ_g,
                         -gyroX_degs, -gyroY_degs, gyroZ_degs, magX_mG, -magY_mG,
                         -magZ_mG)) {
@@ -139,24 +140,12 @@ void FlightController::runStateEstimator() {
         _netVerticalAcceleration = computeNetAcceleration(false, -accX_g, accY_g, accZ_g, false);
         _tilt = readCurrentTilt();
       }
-
-      // DEBUG HIL ACCELERATION
-      if (motor_on || _flightState == FlightState::AIRBRAKE_DEPLOYMENT) {
-           static int hil_debug_prescaler = 0;
-           if (hil_debug_prescaler++ > 25) { // Print every ~0.5s
-               DEBUG_PRINT_F("[HIL DEBUG] AccZ_Input: "); DEBUG_PRINT(accZ_g);
-               DEBUG_PRINT_F(" g | NetAcc: "); DEBUG_PRINT(_netVerticalAcceleration);
-               DEBUG_PRINTLN_F(" m/s^2");
-               hil_debug_prescaler = 0;
-           }
-      }
     } else {
       // Simple HIL mode
       _netVerticalAcceleration = hilData.netVerticalAcceleration_ms2;
       _tilt = 90 - hilData.tilt; // Convert tilt to match system definition
     }
     
-
 
   } else {
     // --- Real Mode: Read data from sensors ---
@@ -298,15 +287,14 @@ void FlightController::calibrationCheckLoop() {
 void FlightController::healthCheckLoop() {
   DEBUG_PRINTLN_F("State: Health Check");
 
-  recalibrateGroundPressure();
+  recalibrateGroundPressure(_barometricPressure);
 
   if (checkFlightSystemHealth(_filteredAltitude, _filteredVerticalVelocity)) {
     _healthCheckCount++;
     DEBUG_PRINT_F("Component health OK this iteration. Count: ");
     DEBUG_PRINTLN(_healthCheckCount);
 
-    if (_healthCheckCount >=
-        _reqHealthChecks) { 
+    if (_healthCheckCount >=_reqHealthChecks) { 
       Serial.println("HEALTH CHECK: Consecutive checks OK. Transitioning...");
       signalSuccessfullModule("Health Check Complete");
 
@@ -334,7 +322,7 @@ void FlightController::healthCheckLoop() {
 void FlightController::waitLaunchLoop() {
   _loopPrintCounter++;
 
-  recalibrateGroundPressure();
+  recalibrateGroundPressure(_barometricPressure);
 
   if (_loopPrintCounter > _printCountLimit) {
     DEBUG_PRINT_F("STATE: WAIT_LAUNCH | Alt: ");
@@ -622,16 +610,43 @@ bool FlightController::checkFlightSystemHealth(float filteredAltitude,
   }
 
   if (_testServo) {
-    _airbrakeServo.write(0);
-    delay(500);
-    _airbrakeServo.write(45);
-    delay(500);
-    _airbrakeServo.write(90);
-    delay(500);
-    _airbrakeServo.write(45);
-    delay(500);
-    _airbrakeServo.write(0);
-    _testServo = false;
+    if (millis() - _servoTestLastTime >= 500) {
+      _servoTestLastTime = millis();
+      _servoTestStep++;
+
+      switch (_servoTestStep) {
+        case 1:
+          // Step 1: Go to 0
+          _airbrakeServo.write(0);
+          DEBUG_PRINTLN_F("SERVO TEST: 0 deg");
+          break;
+        case 2:
+          // Step 2: Go to 45
+          _airbrakeServo.write(45);
+          DEBUG_PRINTLN_F("SERVO TEST: 45 deg");
+          break;
+        case 3:
+          // Step 3: Go to 90
+          _airbrakeServo.write(90);
+          DEBUG_PRINTLN_F("SERVO TEST: 90 deg");
+          break;
+        case 4:
+          // Step 4: Go to 45
+          _airbrakeServo.write(45);
+          DEBUG_PRINTLN_F("SERVO TEST: 45 deg");
+          break;
+        case 5:
+          // Step 5: Go to 0 and Finish
+          _airbrakeServo.write(0);
+          DEBUG_PRINTLN_F("SERVO TEST: 0 deg (Done)");
+          _testServo = false;
+          _servoTestStep = 0;
+          return healthOk; // Return actual health status now that test is done
+          break;
+      }
+    }
+    // While testing, return false to keep system in HEALTH_CHECK state
+    return false; 
   }
 
   return healthOk;
@@ -773,16 +788,16 @@ bool FlightController::detectApogeeByRegression(float filteredAltitude,
                                           // the oldest element
   float t0 = _regressionTimeBuffer[oldestIndex];
 
-  // 3. Accumulate Sums for Least Squares
-  float sum_t = 0, sum_t2 = 0, sum_t3 = 0, sum_t4 = 0;
-  float sum_y = 0, sum_ty = 0, sum_t2y = 0;
+  // 3. Accumulate Sums for Least Squares (Use double for precision)
+  double sum_t = 0, sum_t2 = 0, sum_t3 = 0, sum_t4 = 0;
+  double sum_y = 0, sum_ty = 0, sum_t2y = 0;
 
   for (int i = 0; i < _regressionWindowSize; i++) {
     int idx = (oldestIndex + i) % _regressionWindowSize;
 
-    float t = _regressionTimeBuffer[idx] - t0; // Relative time
-    float y = _regressionAltBuffer[idx];
-    float t2 = (float)t * t;
+    double t = (double)(_regressionTimeBuffer[idx] - t0); // Relative time
+    double y = (double)_regressionAltBuffer[idx];
+    double t2 = t * t;
 
     sum_t += t;
     sum_t2 += t2;
@@ -796,19 +811,20 @@ bool FlightController::detectApogeeByRegression(float filteredAltitude,
 
   // 4. Setup and Solve the Linear System
   // Matrix A * x = B
-  Matrix3f A;
-  A << _regressionWindowSize, sum_t, sum_t2, sum_t, sum_t2, sum_t3, sum_t2,
-      sum_t3, sum_t4;
+  Matrix3d A;
+  A << (double)_regressionWindowSize, sum_t, sum_t2, 
+       sum_t, sum_t2, sum_t3, 
+       sum_t2, sum_t3, sum_t4;
 
-  Vector3f B;
+  Vector3d B;
   B << sum_y, sum_ty, sum_t2y;
 
   // Solve for x = [c, b, a] (where y = at^2 + bt + c)
   // LDLT decomposition is faster than full inversion
-  Vector3f x = A.ldlt().solve(B);
+  Vector3d x = A.ldlt().solve(B);
 
-  float a = x[2]; // Quadratic coefficient (Concavity / Acceleration)
-  float b = x[1]; // Linear coefficient (Initial velocity)
+  float a = (float)x[2]; // Quadratic coefficient (Concavity / Acceleration)
+  float b = (float)x[1]; // Linear coefficient (Initial velocity)
   // float c = x[0]; // Initial altitude (not used for decision)
 
   // 5. Coefficient Analysis

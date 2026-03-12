@@ -734,7 +734,6 @@ void DataManager::receiveHILFile(const char* HILFileName) {
 
 
 
-
 void DataManager::runFrequencyTest(uint32_t freq, u_int16_t flushLimit, u_int16_t numberOfRecords, bool onlyPrintf) {
     RawFlightData data = {123456, 1.1, -2.2, 9.8, 0.1, 0.2, 0.3, 15.0, 20.0, 25.0, 1.0, 0.0, 0.0, 0.0, 100.5, 50.2, 1.5, 5.0, 101325.0, 45, 0.02, 0.07, 2};
     Serial.println("\n=======================================");
@@ -870,3 +869,7 @@ void DataManager::runStrategyBenchmark(uint32_t freq, u_int16_t numberOfRecords)
     Serial.println("------------------------------------------------------------------");
     SD.end();
 }
+
+// Benchmark the SD card 
+  // DataManager::getInstance().runFrequencyTest(16000000, 50, 1000, false);
+  // DataManager::getInstance().runStrategyBenchmark(16000000, 1000);

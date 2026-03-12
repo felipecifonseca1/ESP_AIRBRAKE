@@ -28,7 +28,8 @@ constexpr float Ts_ms = 20.0f;                    // Loop time in ms (50Hz)
 constexpr float Ts = Ts_ms / 1000.0f;             // Loop time in seconds
 constexpr float apoggeTargetAltitude_m = 3254.0f; // Apogee target altitude in meters
 constexpr float maxTiltAngle = 20.0f;             // Maximum tilt angle in degrees
-constexpr uint8_t LOG_SYNC_INTERVAL = 1; // 1  = Safe Mode | 10 = Balanced | 50 = Fast
+constexpr uint8_t LOG_SYNC_INTERVAL = 1;          // 1  = Safe Mode | 10 = Balanced | 50 = Fast
+constexpr bool useRecovery = false;               // Use recovery system
 
 // --- IMU Configuration ---
 constexpr bool CALIBRATE_IMU_ON_STARTUP = false;
@@ -38,7 +39,7 @@ constexpr bool PHYSICAL_Z_AXIS_DOWN = true; // Defines the orientation of the ph
 constexpr bool ERASE_CALIBRATION_ON_STARTUP = false;
 
 // --- HIL Simulation ---
-constexpr bool HIL_MODE_ACTIVE = true;
+constexpr bool HIL_MODE_ACTIVE = false;
 constexpr char HIL_FILENAME[] = "/Teste_HIL_Sensors_no_bias.csv";
 
 // --- Servo Configuration ---
