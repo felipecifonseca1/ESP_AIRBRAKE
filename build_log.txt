@@ -34,18 +34,24 @@ Dependency Graph
 |-- SPI @ 3.3.5
 |-- Wire @ 3.3.5
 Building in release mode
-Compiling .pio\build\esp32doit-devkit-v1\libb28\DataManager\DataManager.cpp.o
-Compiling .pio\build\esp32doit-devkit-v1\lib52f\FlightController\FlightController.cpp.o
+Compiling .pio\build\esp32doit-devkit-v1\lib6ba\ModuleMPU9250\Funcoes_suporte_IMU.cpp.o
+Compiling .pio\build\esp32doit-devkit-v1\FrameworkArduino\stdlib_noniso.c.o
+Compiling .pio\build\esp32doit-devkit-v1\FrameworkArduino\wiring_pulse.c.o
+Compiling .pio\build\esp32doit-devkit-v1\FrameworkArduino\wiring_shift.c.o
+cc1.exe: warning: command-line option '-fno-rtti' is valid for C++/D/ObjC++ but not for C
+cc1.exe: warning: command-line option '-fno-rtti' is valid for C++/D/ObjC++ but not for C
+cc1.exe: warning: command-line option '-fno-rtti' is valid for C++/D/ObjC++ but not for C
+Archiving .pio\build\esp32doit-devkit-v1\libFrameworkArduino.a
 Linking .pio\build\esp32doit-devkit-v1\firmware.elf
 Firmware metrics can not be shown. Set the terminal codepage to "utf-8" or "cp65001" on Windows.
 Retrieving maximum program size .pio\build\esp32doit-devkit-v1\firmware.elf
 Checking size .pio\build\esp32doit-devkit-v1\firmware.elf
 Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
-RAM:   [=         ]   7.6% (used 24772 bytes from 327680 bytes)
-Flash: [====      ]  36.0% (used 471647 bytes from 1310720 bytes)
+RAM:   [=         ]   7.6% (used 24788 bytes from 327680 bytes)
+Flash: [====      ]  36.1% (used 472535 bytes from 1310720 bytes)
 Building .pio\build\esp32doit-devkit-v1\firmware.bin
 esptool v5.1.0
 Creating ESP32 image...
 Merged 2 ELF sections.
 Successfully created ESP32 image.
-========================= [SUCCESS] Took 15.55 seconds =========================
+========================= [SUCCESS] Took 10.68 seconds =========================

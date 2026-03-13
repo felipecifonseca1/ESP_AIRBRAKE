@@ -7,7 +7,8 @@
 #include "Sinalizacao.h"
 
 
-MPU9250 mpu;  // Global MPU9250 object
+MPU9250_HAL flightIMU;  // Global HAL object
+MPU9250& mpu = flightIMU.getRawDevice(); // Legacy reference for orientation math
 MPU9250Setting mpuConfig;
 
 const float ACCEL_CALIB_SENSITIVITY_FS = 16384.0f; // LSB/g ( Range for calib = +/-2g)
@@ -386,23 +387,15 @@ bool setup_IMU(bool calibrate_if_needed, bool perform_fine_tuning_on_calib, bool
     DEBUG_PRINTLN_F("SETUP_IMU: Initializing MPU9250..."); 
 
     // Define the final FLIGHT configuration
-    mpuConfig.accel_fs_sel = ACCEL_FS_SEL::A16G;
-    mpuConfig.gyro_fs_sel = GYRO_FS_SEL::G2000DPS;
-    mpuConfig.mag_output_bits = MAG_OUTPUT_BITS::M16BITS;
-    mpuConfig.fifo_sample_rate = FIFO_SAMPLE_RATE::SMPL_200HZ;
-    mpuConfig.gyro_fchoice = 0x03;
-    mpuConfig.gyro_dlpf_cfg = GYRO_DLPF_CFG::DLPF_41HZ;
-    mpuConfig.accel_fchoice = 0x01;
-    mpuConfig.accel_dlpf_cfg = ACCEL_DLPF_CFG::DLPF_45HZ;
-    // Configure magnetic declination (examples: Sp:-21.46, Pira:-21.47, Midland: 5.32, Munchen: 4.27)
-    // CHANGE FOR COMPETITION if needed
-    mpu.setMagneticDeclination(-21.46); // Adjust according to your actual launch location
-
-    // Apply the initial flight configuration
-    if (!mpu.setup(0x68, mpuConfig)) { 
+    // Configuration is now handled inside MPU9250_HAL::init()
+    if (!flightIMU.init()) { 
         DEBUG_PRINTLN_F("SETUP_IMU: ERROR - MPU failed to connect or initial setup.");
         return false;
     }
+    // Configure magnetic declination (examples: Sp:-21.46, Pira:-21.47, Midland: 5.32, Munchen: 4.27)
+    // CHANGE FOR COMPETITION if needed
+    flightIMU.getRawDevice().setMagneticDeclination(-21.46); // Adjust according to your actual launch location
+
     DEBUG_PRINTLN_F("SETUP_IMU: MPU9250 connected and flight configuration applied.");
 
     // Check if calibration data exists or if a new calibration is needed
@@ -424,7 +417,7 @@ bool setup_IMU(bool calibrate_if_needed, bool perform_fine_tuning_on_calib, bool
 
     // Ensure the MPU is set to the flight configuration
     DEBUG_PRINTLN_F("SETUP_IMU: Reapplying flight configuration and loading final biases...");
-    if (!mpu.setup(0x68, mpuConfig)) { 
+    if (!flightIMU.init()) { 
         DEBUG_PRINTLN_F("SETUP_IMU: ERROR - Failed to reapply flight config to MPU.");
         return false;
     }
@@ -533,7 +526,8 @@ float computeNetAcceleration(bool print_debug, float ax_input, float ay_input, f
     if (!autoUpdate) {
         ax_g = ax_input;      ay_g = ay_input;      az_g = az_input;
     } else {
-        ax_g = mpu.getAccX(); ay_g = mpu.getAccY(); az_g = mpu.getAccZ();
+        // Here we test the newly created HAL methods directly!
+        ax_g = flightIMU.getAccX(); ay_g = flightIMU.getAccY(); az_g = flightIMU.getAccZ();
     }
 
    

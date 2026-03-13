@@ -1,10 +1,10 @@
 #ifndef FUNCOES_SUPORTE_IMU_H  
 #define FUNCOES_SUPORTE_IMU_H
 
-// Dentro de Funcoes_suporte_IMU.h
-#include "MPU9250.h" 
+#include "IMUSensor/MPU9250_HAL.h" 
 
-extern MPU9250 mpu;
+extern MPU9250_HAL flightIMU;
+extern MPU9250& mpu;
 extern MPU9250Setting mpuConfig;
 
 void saveCalibration(bool print);
