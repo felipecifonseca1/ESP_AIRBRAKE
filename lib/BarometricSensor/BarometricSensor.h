@@ -19,7 +19,6 @@ class BarometricSensor {
     public:
         virtual ~BarometricSensor() = default;
         
-        // Pure virtual methods to be implemented by specific hardware wrappers
         virtual bool init() = 0;
         virtual float getPressurePa() = 0;
         virtual float getTemperatureC() = 0;

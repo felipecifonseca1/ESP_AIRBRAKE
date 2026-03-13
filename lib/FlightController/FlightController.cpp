@@ -9,6 +9,7 @@
 #include "Sinalizacao.h"
 #include <ArduinoEigenDense.h>
 #include <math.h>
+#include "MPU9250_HAL.h"
 
 using namespace Eigen;
 
@@ -21,10 +22,13 @@ static const uint32_t RTC_MAGIC = 0xABBA1234;
  * @attention The very first time this is called in setup(), the BarometricSensor pointer must be provided.
  * @return Reference to the FlightController instance.
  */
-FlightController &FlightController::getInstance(BarometricSensor* b) {
-  static FlightController instance(b);
+FlightController &FlightController::getInstance(BarometricSensor* b, AttitudeEstimator* estimator) {
+  static FlightController instance(b, estimator);
   if (b != nullptr) {
       instance.baro = b;
+  }
+  if (estimator != nullptr) {
+      instance._attitudeEstimator = estimator;
   }
   return instance;
 }
@@ -32,7 +36,10 @@ FlightController &FlightController::getInstance(BarometricSensor* b) {
 /**
  * @brief Constructor. Initializes the PID controller and resets buffers.
  */
-FlightController::FlightController(BarometricSensor* b): baro(b), _controller(PID_KP, PID_KI, PID_KD, ROCKET_MASS_KG, ROCKET_AREA_M2, Ts){ // Initialize PID Controller using global constants
+FlightController::FlightController(BarometricSensor* b, AttitudeEstimator* estimator): 
+    baro(b), 
+    _attitudeEstimator(estimator), 
+    _controller(PID_KP, PID_KI, PID_KD, ROCKET_MASS_KG, AIRBRAKE_REF_AREA_M2, Ts){ // Initialize PID Controller using global constants
 
   // Initialize buffers
   for (int i = 0; i < _burnoutWindowSize; i++)
@@ -123,26 +130,13 @@ void FlightController::runStateEstimator() {
       float magY_mG = hilData.magY_T * 1e7;
       float magZ_mG = hilData.magZ_T * 1e7;
 
-      if (PHYSICAL_Z_AXIS_DOWN) {
-     
-        if (!mpu.update(Ts, motor_on, false, accX_g, accY_g, -accZ_g,
-                        -gyroX_degs, -gyroY_degs, gyroZ_degs, magX_mG, -magY_mG,
-                        -magZ_mG)) {
-          DEBUG_PRINTLN_F("Failed to update simulated IMU data!");
-          return;
-        }
-        _netVerticalAcceleration = computeNetAcceleration(false, accX_g, accY_g, -accZ_g, false);
-        _tilt = readCurrentTilt();
-      } else {
-        if (!mpu.update(Ts, motor_on, false, -accX_g, accY_g, accZ_g,
-                        gyroX_degs, -gyroY_degs, -gyroZ_degs, -magX_mG,
-                        -magY_mG, magZ_mG)) {
-          DEBUG_PRINTLN_F("Failed to update simulated IMU data!");
-          return;
-        }
-        _netVerticalAcceleration = computeNetAcceleration(false, -accX_g, accY_g, accZ_g, false);
-        _tilt = readCurrentTilt();
-      }
+      // HIL bypasses the HAL hardware poll, we use the abstract injectData method
+      // to feed raw values into the IMU abstraction layer.
+      _attitudeEstimator->getIMU()->injectData(accX_g, accY_g, accZ_g, gyroX_degs, gyroY_degs, gyroZ_degs, magX_mG, magY_mG, magZ_mG);
+      
+      _attitudeEstimator->update(Ts);
+      _netVerticalAcceleration = _attitudeEstimator->getNetVerticalAcceleration();
+      _tilt = readCurrentTilt();
     } else {
       // Simple HIL mode
       _netVerticalAcceleration = hilData.netVerticalAcceleration_ms2;
@@ -152,12 +146,10 @@ void FlightController::runStateEstimator() {
 
   } else {
     // --- Real Mode: Read data from sensors ---
-    if (!mpu.update(Ts, motor_on)) {
-      DEBUG_PRINTLN_F("Failed to read IMU data!");
-      return;
-    }
+    _attitudeEstimator->getIMU()->update();
+    _attitudeEstimator->update(Ts);
 
-    _netVerticalAcceleration = computeNetAcceleration(false);
+    _netVerticalAcceleration = _attitudeEstimator->getNetVerticalAcceleration();
     _barometricPressure = baro->getPressurePa();
     _tilt = readCurrentTilt();
   }
@@ -189,19 +181,19 @@ void FlightController::runStateEstimator() {
  */
 void FlightController::updateLogger(RawFlightData &data) {
   data.timestamp = millis(); 
-  data.accX = mpu.getAccX();
-  data.accY = mpu.getAccY();
-  data.accZ = mpu.getAccZ();
-  data.gyroX = mpu.getGyroX();
-  data.gyroY = mpu.getGyroY();
-  data.gyroZ = mpu.getGyroZ();
-  data.magX = mpu.getMagX() / 10.0;
-  data.magY = mpu.getMagY() / 10.0;
-  data.magZ = mpu.getMagZ() / 10.0;
-  data.qW = mpu.getQuaternionW();
-  data.qX = mpu.getQuaternionX();
-  data.qY = mpu.getQuaternionY();
-  data.qZ = mpu.getQuaternionZ();
+  data.accX = _attitudeEstimator->getIMU()->getAccX();
+  data.accY = _attitudeEstimator->getIMU()->getAccY();
+  data.accZ = _attitudeEstimator->getIMU()->getAccZ();
+  data.gyroX = _attitudeEstimator->getIMU()->getGyroX_rads() * RAD_TO_DEG;
+  data.gyroY = _attitudeEstimator->getIMU()->getGyroY_rads() * RAD_TO_DEG;
+  data.gyroZ = _attitudeEstimator->getIMU()->getGyroZ_rads() * RAD_TO_DEG;
+  data.magX = _attitudeEstimator->getIMU()->getMagX() / 10.0;
+  data.magY = _attitudeEstimator->getIMU()->getMagY() / 10.0;
+  data.magZ = _attitudeEstimator->getIMU()->getMagZ() / 10.0;
+  data.qW = _attitudeEstimator->getQuaternionW();
+  data.qX = _attitudeEstimator->getQuaternionX();
+  data.qY = _attitudeEstimator->getQuaternionY();
+  data.qZ = _attitudeEstimator->getQuaternionZ();
   data.filteredAltitude = _filteredAltitude;
   data.filteredVerticalVelocity = _filteredVerticalVelocity;
   data.netVerticalAcceleration = _netVerticalAcceleration;
@@ -277,8 +269,9 @@ void FlightController::update() {
 void FlightController::calibrationCheckLoop() {
   DEBUG_PRINTLN_F("STATE: Sensor Calibration");
 
-  if (hasCalibrationDataIMU() && baro->getGroundPressureP0() != 101325.0f) {
-    DEBUG_PRINTLN_F("Initial calibration (IMU/BMP P0) done in setup.");
+  MPU9250_HAL* hal = static_cast<MPU9250_HAL*>(_attitudeEstimator->getIMU());
+  if (hal->hasCalibrationData() && baro->getGroundPressureP0() != 101325.0f) {
+    DEBUG_PRINTLN_F("FlightLogic: Sensors Ready (Calibrated).");
     _flightState = FlightState::HEALTH_CHECK;
     _stateEntryTime = millis();
   }
@@ -305,8 +298,9 @@ void FlightController::healthCheckLoop() {
       DataManager::getInstance().startLogging(); // Activate data logging
 
       // System settings for wait-for-launch
-      setDriftLearning(true); // Enable drift learning on the IMU
-      setFilterBeta(2.5f); // Increase filter beta for faster response during wait
+      _attitudeEstimator->setDriftLearning(true); // Enable drift learning on the IMU
+      _attitudeEstimator->setFilterBeta(2.5f); // Increase filter beta for faster response during wait
+      DEBUG_PRINTLN_F("FlightLogic: Ready for Launch -> WAIT_LAUNCH.");
       _R_kf(1, 1) = 0.000001f; // Reduce velocity measurement variance for ZUKF
       
       _stateEntryTime = millis();
@@ -344,7 +338,8 @@ void FlightController::waitLaunchLoop() {
     DEBUG_PRINTLN_F("LAUNCH DETECTED!");
 
     // System settings for flight
-    setDriftLearning(false); // Disable drift learning on IMU after launch
+    _attitudeEstimator->setDriftLearning(false); // Disable drift learning on IMU after launch
+    DEBUG_PRINTLN_F("Transition: WAIT_LAUNCH -> MOTOR_ON");
     _R_kf(1, 1) = 1000000000.0f; // Set high variance on velocity measurement to ignore zero input during flight
     DataManager::getInstance().setDecimationFactor(1); // Save every 20ms during flight
 
@@ -374,7 +369,7 @@ void FlightController::motorOnLoop() {
   unsigned long tempoDesdeLancamento = millis() - _launchDetectedTime;
   if (detectBurnout(_netVerticalAcceleration, tempoDesdeLancamento)) {
     DEBUG_PRINTLN_F("BURNOUT DETECTED!");
-    setFilterBeta(0.75f);
+    _attitudeEstimator->setFilterBeta(0.75f);
     _flightState = FlightState::BURNOUT;
     _stateEntryTime = millis();
   }
@@ -436,7 +431,7 @@ void FlightController::airbrakeDeploymentLoop() {
   if (detectApogeeByRegression(_filteredAltitude, millis())) {
     DEBUG_PRINTLN_F("APOGEE DETECTED!");
     _flightState = FlightState::APOGEE;
-    setFilterBeta(1.0f);
+    _attitudeEstimator->setFilterBeta(1.0f);
     _stateEntryTime = millis();
     _apogeeDetectedTime = millis();
   }
@@ -527,8 +522,8 @@ void FlightController::forceState(FlightState newState) {
     if (_flightState == FlightState::WAIT_LAUNCH) {
         DataManager::getInstance().startLogging(); 
         DataManager::getInstance().setDecimationFactor(10);
-        setDriftLearning(true); 
-        setFilterBeta(2.5f);
+        _attitudeEstimator->setDriftLearning(true); 
+        _attitudeEstimator->setFilterBeta(2.5f);
         _R_kf(1, 1) = 0.000001f; 
         _healthCheckCount = 0;
     }
@@ -587,29 +582,30 @@ bool FlightController::checkFlightSystemHealth(float filteredAltitude,
   bool healthOk = true;
 
   // IMU Health Check
-  float ax = mpu.getAccX();
-  float ay = mpu.getAccY();
-  float az = mpu.getAccZ();
+  float ax = _attitudeEstimator->getIMU()->getAccX();
+  float ay = _attitudeEstimator->getIMU()->getAccY();
+  float az = _attitudeEstimator->getIMU()->getAccZ();
   float accel_mag = sqrt(ax * ax + ay * ay + az * az);
 
-  if (accel_mag < 0.85f || accel_mag > 1.15f) { // Tolerance of +/- 0.15g
+  if (accel_mag < (1.0f - HEALTH_ACCEL_MAG_TOLERANCE) || accel_mag > (1.0f + HEALTH_ACCEL_MAG_TOLERANCE)) { // Tolerance defined in Config_voo
     DEBUG_PRINTLN_F("FlightLogic: Health Failure - Accel Magnitude.");
     healthOk = false;
   }
 
-  if (abs(mpu.getGyroX()) > 3.0f || abs(mpu.getGyroY()) > 3.0f ||
-      abs(mpu.getGyroZ()) > 3.0f) { // Tolerance of 3 dps
+  if (abs(_attitudeEstimator->getIMU()->getGyroX_rads()) > (HEALTH_GYRO_TOLERANCE_DPS * DEG_TO_RAD) || 
+      abs(_attitudeEstimator->getIMU()->getGyroY_rads()) > (HEALTH_GYRO_TOLERANCE_DPS * DEG_TO_RAD) ||
+      abs(_attitudeEstimator->getIMU()->getGyroZ_rads()) > (HEALTH_GYRO_TOLERANCE_DPS * DEG_TO_RAD)) { // Tolerance defined in Config_voo
     DEBUG_PRINTLN_F("FlightLogic: Health Failure - High Gyro.");
     healthOk = false;
   }
 
   // Kalman Filter Health Check
-  if (abs(filteredAltitude) > 4.0f) { // Tolerance of +/- 4m on ground
+  if (abs(filteredAltitude) > HEALTH_ALT_TOLERANCE_M) { // Tolerance defined in Config_voo
     DEBUG_PRINT_F("FlightLogic: Health Failure - Altitude Kalman: ");
     DEBUG_PRINTLN(filteredAltitude);
     healthOk = false;
   }
-  if (abs(filteredVerticalVelocity) > 1.0f) { // Tolerance of +/- 1m/s
+  if (abs(filteredVerticalVelocity) > HEALTH_VEL_TOLERANCE_MS) { // Tolerance defined in Config_voo
     DEBUG_PRINT_F("FlightLogic: Health Failure - Velocity Kalman: ");
     DEBUG_PRINTLN(filteredVerticalVelocity);
     healthOk = false;
@@ -841,9 +837,7 @@ bool FlightController::detectApogeeByRegression(float filteredAltitude,
 
   // 5. Coefficient Analysis
 
-  // A. Curve Concavity (2*a):
-  // Must be significantly negative to indicate a ballistic trajectory.
-  bool isConcave = (a < -0.05f);
+  bool isConcave = (a < APOGEE_REGRESSION_CONCAVITY_THRESHOLD);
 
   // B. Estimated Velocity at the CURRENT instant (End of Window):
   // Regression smooths out the velocity. v(t) = 2*a*t + b
@@ -853,8 +847,7 @@ bool FlightController::detectApogeeByRegression(float filteredAltitude,
       t0;
   float estimatedVelocity = 2.0f * a * t_final + b;
 
-  // Must be descending (< 0) with a small hysteresis margin
-  bool isDescending = (estimatedVelocity < -0.5f);
+  bool isDescending = (estimatedVelocity < APOGEE_REGRESSION_DESCENDING_THRESHOLD);
 
   if (isConcave && isDescending) {
     _regressionApogeeConfirmed = true;
@@ -901,7 +894,7 @@ bool FlightController::detectLanding(float filteredVerticalVelocity,
  * @return Current tilt angle in degrees.
  */
 float FlightController::readCurrentTilt() {
-  return calcTilt(); // From Funcoes_suporte_IMU.h
+  return _attitudeEstimator->getTilt(PHYSICAL_Z_AXIS_DOWN); 
 }
 
 // --- Recovery System Implementation ---
@@ -965,19 +958,19 @@ bool FlightController::attemptRecovery() {
  */
 void FlightController::printFullTelemetry() {
 #if USE_TELEPLOT == 2
-  PLOT_VAR("AccX", mpu.getAccX());
-  PLOT_VAR("AccY", mpu.getAccY());
-  PLOT_VAR("AccZ", mpu.getAccZ());
-  PLOT_VAR("GyroX", mpu.getGyroX());
-  PLOT_VAR("GyroY", mpu.getGyroY());
-  PLOT_VAR("GyroZ", mpu.getGyroZ());
-  PLOT_VAR("MagX", mpu.getMagX() / 10.0f);
-  PLOT_VAR("MagY", mpu.getMagY() / 10.0f);
-  PLOT_VAR("MagZ", mpu.getMagZ() / 10.0f);
-  PLOT_VAR("qW", mpu.getQuaternionW());
-  PLOT_VAR("qX", mpu.getQuaternionX());
-  PLOT_VAR("qY", mpu.getQuaternionY());
-  PLOT_VAR("qZ", mpu.getQuaternionZ());
+  PLOT_VAR("AccX", _attitudeEstimator->getIMU()->getAccX());
+  PLOT_VAR("AccY", _attitudeEstimator->getIMU()->getAccY());
+  PLOT_VAR("AccZ", _attitudeEstimator->getIMU()->getAccZ());
+  PLOT_VAR("GyroX", _attitudeEstimator->getIMU()->getGyroX_rads() * RAD_TO_DEG);
+  PLOT_VAR("GyroY", _attitudeEstimator->getIMU()->getGyroY_rads() * RAD_TO_DEG);
+  PLOT_VAR("GyroZ", _attitudeEstimator->getIMU()->getGyroZ_rads() * RAD_TO_DEG);
+  PLOT_VAR("MagX", _attitudeEstimator->getIMU()->getMagX() / 10.0f);
+  PLOT_VAR("MagY", _attitudeEstimator->getIMU()->getMagY() / 10.0f);
+  PLOT_VAR("MagZ", _attitudeEstimator->getIMU()->getMagZ() / 10.0f);
+  PLOT_VAR("qW", _attitudeEstimator->getQuaternionW());
+  PLOT_VAR("qX", _attitudeEstimator->getQuaternionX());
+  PLOT_VAR("qY", _attitudeEstimator->getQuaternionY());
+  PLOT_VAR("qZ", _attitudeEstimator->getQuaternionZ());
   PLOT_VAR("Press", _barometricPressure); // Pa
   PLOT_VAR("Servo", _airbrakeDeployment * 100.0f); // %
   PLOT_VAR("Gain1", _controlGain1);

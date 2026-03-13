@@ -1,113 +1,177 @@
 #ifndef CONFIG_VOO_H
 #define CONFIG_VOO_H
+
 #include <cstdint>
 
-// CONTROLE GLOBAL DE DEBUG SERIAL
-#define DEBUG_SERIAL_ENABLED 1 // 1 - debug | 0 - voo
+// =========================================================================
+// SYSTEM DEBUG & TELEMETRY
+// =========================================================================
 
-// --- Pin Configuration ---
-constexpr uint8_t PIN_BUZZER = 14;
-constexpr uint8_t PIN_LED_1  = 12;
-constexpr uint8_t PIN_LED_2  = 2;  
-constexpr uint8_t PIN_SD_CS   = 5;
-constexpr uint8_t PIN_SD_SCK  = 18;
-constexpr uint8_t PIN_SD_MOSI = 23;
-constexpr uint8_t PIN_SD_MISO = 19;
-constexpr uint8_t PIN_FLASH_CS = 4; 
-constexpr uint8_t PIN_SERVO  = 27;
+#define DEBUG_SERIAL_ENABLED    1      // 1: Debug (Detailed Serial) | 0: Flight (Silent)
+#define USE_TELEPLOT            1      // 2: Full Teleplot | 1: Basic Teleplot | 0: Standard Monitor
 
-// --- Physics Parameters ---
-constexpr float G_GRAVITATIONAL_CONSTANT = 9.80665f; // Gravity acceleration m/s^2
-constexpr float MACH_VELOCITY = 335.0f; // MACH velocity m/s
-constexpr float RHO_AIR = 1.293f; // Air density kg/m^3
-constexpr float ROCKET_MASS_KG = 30.605f;
-constexpr float ROCKET_AREA_M2 = 0.02097f;
+// =========================================================================
+// HARDWARE PINOUT (ESP32)
+// =========================================================================
 
-// --- System Settings ---
-constexpr float Ts_ms = 20.0f;                    // Loop time in ms (50Hz)
-constexpr float Ts = Ts_ms / 1000.0f;             // Loop time in seconds
-constexpr float apoggeTargetAltitude_m = 3254.0f; // Apogee target altitude in meters
-constexpr float maxTiltAngle = 20.0f;             // Maximum tilt angle in degrees
-constexpr uint8_t LOG_SYNC_INTERVAL = 1;          // 1  = Safe Mode | 10 = Balanced | 50 = Fast
-constexpr bool useRecovery = false;               // Use recovery system
-constexpr bool ENABLE_DATA_LOGGING = false;       // Set to false to disable SD card data logging and file creation during testing
+constexpr uint8_t PIN_BUZZER    = 14;  // Piezo buzzer output
+constexpr uint8_t PIN_LED_1     = 12;  // Status LED 1
+constexpr uint8_t PIN_LED_2     = 2;   // Status LED 2 (Built-in for most DevKits)
+constexpr uint8_t PIN_SD_CS     = 5;   // SPI Chip Select for SD Card
+constexpr uint8_t PIN_SD_SCK    = 18;  // SPI Clock
+constexpr uint8_t PIN_SD_MOSI   = 23;  // SPI Master-Out Slave-In
+constexpr uint8_t PIN_SD_MISO   = 19;  // SPI Master-In Slave-Out
+constexpr uint8_t PIN_FLASH_CS  = 4;   // SPI Chip Select for External Flash
+constexpr uint8_t PIN_SERVO     = 27;  // PWM output for Airbrake Servo
 
-// --- IMU Configuration ---
-constexpr bool CALIBRATE_IMU_ON_STARTUP = false;
-constexpr bool PRINT_IMU_PARAMS = false;
-constexpr bool PERFORM_FINE_TUNING = false;
-constexpr bool PHYSICAL_Z_AXIS_DOWN = true; // Defines the orientation of the physical IMU Z axis
-constexpr bool ERASE_CALIBRATION_ON_STARTUP = false;
+// =========================================================================
+// PHYSICAL CONSTANTS & ROCKET SPECS
+// =========================================================================
 
-// --- HIL Simulation ---
-constexpr bool HIL_MODE_ACTIVE = false;
-constexpr char HIL_FILENAME[] = "/Teste_HIL_Sensors_no_bias.csv";
+constexpr float G_GRAVITATIONAL_CONSTANT = 9.80665f;   // Standard gravity [m/s^2]
+constexpr float MACH_VELOCITY            = 335.0f;     // Speed of sound at sea level [m/s]
+constexpr float RHO_AIR                  = 1.293f;     // Standard air density [kg/m^3]
+constexpr float ROCKET_MASS_KG           = 30.605f;    // Current rocket mass [kg]
+constexpr float AIRBRAKE_REF_AREA_M2     = 0.02097f;   // Total cross-sectional area of 4 petals [m^2]
 
-// --- Servo Configuration ---
-constexpr uint16_t SERVO_MIN_PULSE = 560;
-constexpr uint16_t SERVO_MAX_PULSE = 1520;
+// =========================================================================
+// SYSTEM OPERATIONAL SETTINGS
+// =========================================================================
 
-// --- Controller Constants ---
-constexpr float PID_KP = 0.025f;
-constexpr float PID_KI = 0.075f;
-constexpr float PID_KD = 0.02f;
+constexpr float Ts_ms                     = 20.0f;     // Control loop period [ms] (50Hz)
+constexpr float Ts                        = 0.020f;    // Control loop period [s]
+constexpr float apoggeTargetAltitude_m    = 3254.0f;   // Target mission apogee [m]
+constexpr float maxTiltAngle              = 25.0f;     // Max safety tilt for actuation [deg]
+constexpr uint32_t WDT_TIMEOUT_MS         = 5000;      // Watchdog timeout in milliseconds
+constexpr bool useRecovery                = false;     // Enable recovery sequence logic
 
-// --- Kalman Filter Tuning ---
-constexpr float KALMAN_VAR_PROC_POS = 1.0f;
-constexpr float KALMAN_VAR_PROC_VEL = 3.0f;
-constexpr float KALMAN_VAR_MEAS_ALT = 1.0f;
-constexpr float KALMAN_VAR_ZUPT_VEL = 0.000001f;
+// --- IMU & Orientation ---
+constexpr bool PHYSICAL_Z_AXIS_DOWN          = true;   // IMU Mounting: true: Z-Down | false: Z-Up
+constexpr bool CALIBRATE_IMU_ON_STARTUP      = true;   // Run library calib ONLY if data is missing
+constexpr bool PRINT_IMU_PARAMS              = false;  // Print biases to Serial at boot
+constexpr bool PERFORM_FINE_TUNING           = false;  // Run iterative bias tweak on every boot
+constexpr bool ERASE_CALIB_ON_STARTUP        = false;  // Force delete all saved IMU data
 
-// --- Events Detection ---
-constexpr float LAUNCH_ACCEL_THRESHOLD_G = 1.5f; 
-constexpr uint16_t BURNOUT_MIN_MOTOR_TIME_MS = 5000;
-constexpr float    BURNOUT_ACCEL_THRESHOLD_G = 0.5f;
-constexpr float APOGEE_VEL_THRESHOLD_MS = 0.5f;
+// --- SD Card & Logging ---
+constexpr bool ENABLE_DATA_LOGGING        = false;     // SD Card logging master switch
+constexpr char     SD_LOG_FOLDER[]        = "/REG_VOO"; 
+constexpr char     SD_LOG_BASENAME[]      = "VOO_";
+constexpr uint16_t SD_MAX_LOG_FILES       = 1000; 
+constexpr uint32_t SD_WRITE_TIMEOUT_MS    = 80;     // Max time allowed for single write [ms]
+constexpr uint8_t LOG_SYNC_INTERVAL       = 1;         // Data sync: 1: Safe | 10: Balanced | 50: Fast
 
+// --- HIL (Hardware-In-the-Loop) ---
+constexpr bool HIL_MODE_ACTIVE               = true;  // Enable serial-in sensor simulation
+constexpr char HIL_FILENAME[]                = "/Teste_HIL_Sensors_no_bias.csv";
+constexpr uint32_t HIL_STABILIZATION_MS      = 15000; // Time to wait for estimator to settle [ms]
 
-// Macros Serial Debug
+// --- Servo Specs ---
+constexpr uint16_t SERVO_MIN_PULSE           = 560;    // Pulse length for 0 deg (retracted) [us]
+constexpr uint16_t SERVO_MAX_PULSE           = 1520;   // Pulse length for 90 deg (extended) [us]
+
+// =========================================================================
+// FLIGHT CONTROLLER TUNING
+// =========================================================================
+
+// --- PID Coefficients ---
+constexpr float PID_KP = 0.025f;                       // Proportional gain
+constexpr float PID_KI = 0.075f;                       // Integral gain
+constexpr float PID_KD = 0.02f;                        // Derivative gain
+
+// --- Kalman Filter ---
+constexpr float KALMAN_VAR_PROC_POS = 1.0f;            // Process variance: Position
+constexpr float KALMAN_VAR_PROC_VEL = 3.0f;            // Process variance: Velocity
+constexpr float KALMAN_VAR_MEAS_ALT = 1.0f;            // Measurement variance: Baro Altitude
+constexpr float KALMAN_VAR_ZUPT_VEL = 0.000001f;       // Zero-velocity update variance
+
+// =========================================================================
+// FLIGHT EVENTS DETECTION
+// =========================================================================
+
+// --- Launch Detection ---
+constexpr float LAUNCH_ACCEL_THRESHOLD_G   = 1.5f;     // Acceleration threshold for lift-off [g]
+constexpr float LAUNCH_HEIGHT_THRESHOLD_M  = 4.0f;     // Minimum AGL altitude to confirm launch [m]
+
+// --- Burnout Detection ---
+constexpr uint16_t BURNOUT_MIN_MOTOR_TIME_MS = 5000;   // Wait time before allowing burnout check [ms]
+constexpr float    BURNOUT_ACCEL_THRESHOLD_G = 0.5f;   // Acceleration drop threshold [g]
+constexpr uint8_t  BURNOUT_WINDOW_SIZE       = 20;     // Gravity compensation window size
+constexpr uint8_t  BURNOUT_CONFIRMATION_COUNT = 5;     // Cycles required for state lock
+
+// --- Airbrake Actuation ---
+constexpr float ACTUATION_MIN_HEIGHT_M     = 500.0f;   // Start control only above this altitude [m]
+constexpr float ACTUATION_VEL_LIMIT_MACH   = 0.7f;     // Maximum allowed speed for deployment [Mach]
+
+// --- Apogee Detection ---
+constexpr float   APOGEE_VEL_THRESHOLD_MS  = 0.5f;     // Vertical speed threshold for peak [m/s]
+constexpr uint8_t APOGEE_READINGS_CONFIRMATION = 10;   // Readings required to confirm apogee
+constexpr uint8_t APOGEE_REGRESSION_WINDOW  = 30;      // Moving window for polynomial regression
+constexpr float   APOGEE_REGRESSION_CONCAVITY_THRESHOLD = -0.05f; // Curve shape threshold
+constexpr float   APOGEE_REGRESSION_DESCENDING_THRESHOLD = -0.5f; // Confirmed descent velocity [m/s]
+
+// --- Landing Detection ---
+constexpr float    LANDING_VEL_THRESHOLD_MS          = 0.5f;   // Max velocity for ground detect [m/s]
+constexpr float    LANDING_ALT_THRESHOLD_M           = 10.0f;  // Max altitude for ground detect [m]
+constexpr uint32_t LANDING_MIN_TIME_AFTER_APOGEE_MS  = 90000;  // Absolute safety timeout after apogee [ms]
+constexpr uint16_t LANDING_STABLE_TIME_MS            = 5000;   // Stability duration for lock [ms]
+constexpr uint32_t LANDING_MAX_WAIT_TIME_MS          = 600000; // Ultimate timeout (10 min) [ms]
+
+// =========================================================================
+// SYSTEM HEALTH & DIAGNOSTICS
+// =========================================================================
+
+constexpr uint8_t HEALTH_CHECK_REQUIRED_COUNT = 5;     // Success cycles to return "Health OK"
+constexpr float   HEALTH_ACCEL_MAG_TOLERANCE  = 0.15f; // Stationary 1g test tolerance [g]
+constexpr float   HEALTH_GYRO_TOLERANCE_DPS   = 1.0f;  // Stationary drift tolerance [dps]
+constexpr float   HEALTH_ALT_TOLERANCE_M      = 4.0f;  // Baro variance tolerance at pad [m]
+constexpr float   HEALTH_VEL_TOLERANCE_MS     = 1.0f;  // Kalman velocity variance at pad [m/s]
+constexpr uint8_t TELEMETRY_PRINT_INTERVAL    = 2;     // Cycles between telemetry Serial prints
+
+// =========================================================================
+// SENSOR & ALGORITHM THRESHOLDS
+// =========================================================================
+
+constexpr float ATTITUDE_NET_ACC_VIBRATION_THRESHOLD = 0.2f;   // Vertical noise floor [m/s^2]
+constexpr float CALIBRATION_ACCEL_TOL_G              = 0.0025f; // Iterative target for Accel [g]
+constexpr float CALIBRATION_GYRO_TOL_DPS             = 0.025f;  // Iterative target for Gyro [dps]
+constexpr int   CALIBRATION_MAX_ITERATIONS           = 30;      // Safety limit for Step-3 search
+
+// =========================================================================
+// DEBUG MACROS
+// =========================================================================
+
 #if DEBUG_SERIAL_ENABLED == 1
-    // Se o debug estiver ATIVADO:
-    #include <Arduino.h> // Necessário para Serial e F()
+    #include <Arduino.h>
 
     #define DEBUG_PRINT(...)         Serial.print(__VA_ARGS__)
     #define DEBUG_PRINTLN(...)       Serial.println(__VA_ARGS__)
-
-    #define DEBUG_PRINT_F(str)     Serial.print(F(str))
-    #define DEBUG_PRINTLN_F(str)   Serial.println(F(str))
+    #define DEBUG_PRINT_F(str)       Serial.print(F(str))
+    #define DEBUG_PRINTLN_F(str)     Serial.println(F(str))
     
-    // Para placas como Teensy que suportam Serial.printf 
-    // Adicione outras definições de placas se necessário 
     #if defined(__IMXRT1062__) || defined(ARDUINO_TEENSY41) || defined(ARDUINO_TEENSY40) || defined(ESP32)
         #define DEBUG_PRINTF(fmt, ...) Serial.printf(fmt, ##__VA_ARGS__)
     #else
         #define DEBUG_PRINTF(fmt, ...) \
             do { \
-                Serial.print(F("[printf no dispo] ")); \
+                Serial.print(F("[printf not available] ")); \
                 Serial.print(F(fmt)); \
             } while(0)
-        #define DEBUG_PRINTF(fmt, ...) // Alternativa: compila para nada
     #endif
-
 #else
-    // Se o debug estiver DESATIVADO:
     #define DEBUG_PRINT(...)
     #define DEBUG_PRINTLN(...)
     #define DEBUG_PRINT_F(str)
     #define DEBUG_PRINTLN_F(str)
     #define DEBUG_PRINTF(fmt, ...)
-#endif // DEBUG_SERIAL_ENABLED
+#endif
 
-
-// --- Teleplot Configuration ---
-#define USE_TELEPLOT 0 // 2 = Full Teleplot | 1 = Basic Teleplot | 0 = Standard Arduino Serial Monitor
-
+// --- Teleplot Macros ---
 #if USE_TELEPLOT >= 1
     #define PRINT_STATE(stateName) DEBUG_PRINTLN_F("STATE: " stateName)
-    #define PLOT_VAR(name, val) DEBUG_PRINT_F(">"); DEBUG_PRINT_F(name); DEBUG_PRINT_F(":"); DEBUG_PRINTLN(val)
+    #define PLOT_VAR(name, val)    DEBUG_PRINT_F(">"); DEBUG_PRINT_F(name); DEBUG_PRINT_F(":"); DEBUG_PRINTLN(val)
 #else
     #define PRINT_STATE(stateName) DEBUG_PRINT_F("STATE: " stateName " | ")
-    #define PLOT_VAR(name, val) DEBUG_PRINT_F(name); DEBUG_PRINT_F(": "); DEBUG_PRINT(val); DEBUG_PRINT_F(" | ")
+    #define PLOT_VAR(name, val)    DEBUG_PRINT_F(name); DEBUG_PRINT_F(": "); DEBUG_PRINT(val); DEBUG_PRINT_F(" | ")
 #endif
 
 #endif // CONFIG_VOO_H

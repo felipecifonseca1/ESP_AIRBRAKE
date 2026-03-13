@@ -7,8 +7,8 @@
 #include <Arduino.h>
 #include <ArduinoEigenDense.h>
 #include <ESP32Servo.h>
-#include <cstdint>
 #include "BarometricSensor.h"
+#include "AttitudeEstimator.h"
 
 
 
@@ -41,7 +41,7 @@ struct FlightRecoveryData {
 class FlightController {
 public:
   // Singleton access
-  static FlightController &getInstance(BarometricSensor* b = nullptr);
+  static FlightController &getInstance(BarometricSensor* b = nullptr, AttitudeEstimator* estimator = nullptr);
 
   // --- Main Update Loop ---
   /**
@@ -105,8 +105,9 @@ public:
 
 private:
   // Private constructor for Singleton
-  FlightController(BarometricSensor* b);
+  FlightController(BarometricSensor* b, AttitudeEstimator* estimator);
   BarometricSensor* baro;
+  AttitudeEstimator* _attitudeEstimator;
 
   // Delete copy constructor and assignment operator
   FlightController(const FlightController &) = delete;
@@ -153,7 +154,7 @@ private:
   const float _Ki = PID_KI;
   const float _Kd = PID_KD;
   const float _mass_kg = ROCKET_MASS_KG;
-  const float _area_m2 = ROCKET_AREA_M2;
+  const float _area_m2 = AIRBRAKE_REF_AREA_M2;
   const float _Ts_ms = Ts_ms;
   const float _Ts = Ts;
 
@@ -168,13 +169,13 @@ private:
 
   // Launch Detection Constants
   const float _accelLimitLaunch = LAUNCH_ACCEL_THRESHOLD_G * G_GRAVITATIONAL_CONSTANT;
-  const int8_t _heightLimitLaunch = 4;
+  const float _heightLimitLaunch = LAUNCH_HEIGHT_THRESHOLD_M;
 
   // Burnout Detection
-  static const int _burnoutWindowSize = 20;
+  static const int _burnoutWindowSize = BURNOUT_WINDOW_SIZE;
   const uint16_t _minMotorBurnTime = BURNOUT_MIN_MOTOR_TIME_MS;
   const float _accelLimitBurnout = BURNOUT_ACCEL_THRESHOLD_G * G_GRAVITATIONAL_CONSTANT;
-  const int _burnoutConfirmationCount = 5;
+  const int _burnoutConfirmationCount = BURNOUT_CONFIRMATION_COUNT;
 
   // Burnout Buffer State
   float _burnoutBufferAcc[_burnoutWindowSize];
@@ -184,19 +185,19 @@ private:
   int _burnoutCounter = 0;
 
   // Airbrake Actuation Constants
-  const uint16_t _minActuationHeight = 500;
-  const float _velLimitActuation = 0.7f * 335.0f; // 0.7 Mach
+  const float _minActuationHeight = ACTUATION_MIN_HEIGHT_M;
+  const float _velLimitActuation = ACTUATION_VEL_LIMIT_MACH * MACH_VELOCITY;
 
   // Apogee Detection
   const float _velLimitApogee = APOGEE_VEL_THRESHOLD_MS;
-  const uint8_t _readingsForApogeeConfirmation = 10;
+  const uint8_t _readingsForApogeeConfirmation = APOGEE_READINGS_CONFIRMATION;
 
   // Apogee State
   float _maxRecordedHeight = 0.0f;
   uint8_t _consecutiveApogeeCount = 0;
 
   // Apogee Regression
-  static const int _regressionWindowSize = 30;
+  static const int _regressionWindowSize = APOGEE_REGRESSION_WINDOW;
   float _regressionTimeBuffer[_regressionWindowSize];
   float _regressionAltBuffer[_regressionWindowSize];
   int _regressionHeadIndex = 0;
@@ -204,22 +205,22 @@ private:
   bool _regressionApogeeConfirmed = false;
 
   // Landing Detection
-  const float _velLimitLanding = 0.5f;
-  const uint8_t _altLimitLanding = 10;
-  const uint32_t _minTimeAfterApogeeLanding = 90000;
-  const uint16_t _minTimeLanding = 5000;
-  const uint32_t _maxWaitTimeLanding = 600000;
+  const float _velLimitLanding = LANDING_VEL_THRESHOLD_MS;
+  const float _altLimitLanding = LANDING_ALT_THRESHOLD_M;
+  const uint32_t _minTimeAfterApogeeLanding = LANDING_MIN_TIME_AFTER_APOGEE_MS;
+  const uint16_t _minTimeLanding = LANDING_STABLE_TIME_MS;
+  const uint32_t _maxWaitTimeLanding = LANDING_MAX_WAIT_TIME_MS; 
 
   // Landing State
   uint32_t _firstGroundDetectionTime = 0;
 
   // Health Check
   uint8_t _healthCheckCount = 0;
-  const uint8_t _reqHealthChecks = 5;
+  const uint8_t _reqHealthChecks = HEALTH_CHECK_REQUIRED_COUNT;
 
   // Loop Print Counter
   uint8_t _loopPrintCounter = 0;
-  const uint8_t _printCountLimit = 5;
+  const uint8_t _printCountLimit = TELEMETRY_PRINT_INTERVAL;
 
   // --- Kalman Filter & Estimator State ---
   KalmanFilter _kf;

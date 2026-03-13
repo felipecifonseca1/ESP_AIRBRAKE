@@ -19,10 +19,9 @@
 // Modules
 #include "FlightController.h"
 #include "BMP280_HAL.h"
-#include "Funcoes_suporte_IMU.h"
+#include "MPU9250_HAL.h"
+#include "AttitudeEstimator.h"
 #include "KalmanFilter.hh"
-
-#include "Config_voo.h"
 #include "DataManager.h"
 #include "Sinalizacao.h"
 #include <ArduinoEigenDense.h>
@@ -30,7 +29,7 @@
 
 #define EEPROM_SIZE 256 // Define EEPROM size
 
-uint32_t WDT_TIMEOUT_MS = 5000; // Watchdog timeout in milliseconds
+
 // Watchdog configuration
 esp_task_wdt_config_t twdt_config = {.timeout_ms = WDT_TIMEOUT_MS,
                                      .idle_core_mask = (1 << 1), // Watch Core 1 idle task, ignore Core 0
@@ -41,10 +40,11 @@ RawFlightData flightData;
 
 // --- Hardware Instantiation ---
 BMP280_HAL flightBaro(0x76); 
+MPU9250_HAL flightIMU(0x68);
 
 // --- Dependency Injection ---
-FlightController &flightController = FlightController::getInstance(&flightBaro);
-
+AttitudeEstimator flightAttitude(&flightIMU);
+FlightController &flightController = FlightController::getInstance(&flightBaro, &flightAttitude);
 
 // --- FreeRTOS Handles ---
 QueueHandle_t flightDataQueue;
@@ -222,10 +222,26 @@ void setup() {
   // IMU Setup
   if (isCrashRecovery) {
       DEBUG_PRINTLN_F("BOOT: Skipping IMU Calibration for Recovery.");
-      verifyModule(setup_IMU(false, false, false), "IMU"); // No Calib, No FineTune, No Print
+      verifyModule(flightIMU.init(), "IMU"); 
   } else {
-      if (ERASE_CALIBRATION_ON_STARTUP) eraseCalibration(); // Moved here logic
-      verifyModule(setup_IMU(CALIBRATE_IMU_ON_STARTUP, PERFORM_FINE_TUNING, PRINT_IMU_PARAMS), "IMU");
+      if (ERASE_CALIB_ON_STARTUP) {
+          flightIMU.eraseCalibration(); 
+          DEBUG_PRINTLN_F("BOOT: EEPROM Wiped, forcing calibration...");
+      }
+      
+      verifyModule(flightIMU.init(), "IMU");
+      
+      if (ERASE_CALIB_ON_STARTUP || !flightIMU.hasCalibrationData()) {
+          flightIMU.runFullCalibration(PRINT_IMU_PARAMS, PERFORM_FINE_TUNING, PHYSICAL_Z_AXIS_DOWN);
+      } else {
+          flightIMU.loadCalibration(PRINT_IMU_PARAMS);
+          if (PERFORM_FINE_TUNING) {
+              DEBUG_PRINTLN_F("Performing iterative Fine-Tuning update...");
+              float accel_tol_g = 0.0025;
+              float gyro_tol_dps = 0.025;
+              flightIMU.adjustCalibrationIteratively(50, true, accel_tol_g, gyro_tol_dps, 30, PHYSICAL_Z_AXIS_DOWN);
+          }
+      }
   }
 
   // Sensors or HIL setup
@@ -284,7 +300,6 @@ void setup() {
        flightController.retractAirbrakes();
        delay(500); 
     } else {
-       // Just attach servo, don't move it
        flightController.setupServo(); 
     }
   }

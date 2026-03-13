@@ -137,9 +137,9 @@ private:
     }
 
     // Data directories
-    const char* _logFolder = "/REG_VOO"; 
-    const char* _logBasename = "VOO_";
-    const uint16_t _maxLogFiles = 1000; 
+    const char* _logFolder = SD_LOG_FOLDER; 
+    const char* _logBasename = SD_LOG_BASENAME;
+    const uint16_t _maxLogFiles = SD_MAX_LOG_FILES; 
     
     // State variables
     bool _loggingActive;
@@ -157,7 +157,7 @@ private:
     uint8_t _sdRecordCounter;
     uint8_t _sdLEDCounter;
     const uint32_t PRE_ALLOC_SIZE = 20 * 1024 * 1024; // 20 Mb files
-    const uint32_t _sdWriteTimeoutMs = 80;            // 80ms timeout
+    const uint32_t _sdWriteTimeoutMs = SD_WRITE_TIMEOUT_MS;
 
     // Pins VSPI
     const u_int8_t _pinCS_SD = PIN_SD_CS; 
@@ -174,7 +174,7 @@ private:
     // Stabilization variables
     bool _hilStabilizing;             // Flag to indicate stabilization state
     unsigned long _hilStartTimeMS;   
-    const unsigned long _hilStabilizationDurationMS = 20000; // Stabilization time 20s
+    const unsigned long _hilStabilizationDurationMS = HIL_STABILIZATION_MS; 
     HILSimulationData _staticHILFrame; // Data from the first line
    
     // Helpers

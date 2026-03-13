@@ -25,6 +25,12 @@ public:
      * @return True if new data was successfully read.
      */
     virtual bool update() = 0;
+
+    /**
+     * @brief Injects external sensor data for HIL (Hardware-In-the-Loop) simulations.
+     * @details This bypasses hardware polling and manually sets internal sensor values.
+     */
+    virtual void injectData(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz) = 0;
     
     // --- Calibration Triggers ---
     virtual void calibrateAccel() = 0;
