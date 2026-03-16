@@ -48,8 +48,10 @@ void buzzerBeep(uint16_t duration, uint16_t frequency) {
  * @warning A funcao esta quebrada
  */
 void buzzerBeeps(uint8_t numberOfBeeps, uint16_t durationBeeps, uint16_t durationPause, uint16_t frequency) {
-   
-    tone(PIN_BUZZER, frequency, durationBeeps); 
+    for (int i = 0; i < numberOfBeeps; i++) {
+        tone(PIN_BUZZER, frequency, durationBeeps); 
+        delay(durationBeeps + durationPause);
+    }
 }
 
 /**
@@ -91,7 +93,7 @@ void ledBlink(uint8_t pin_led, uint8_t numberOfBlinks, uint16_t durationOn, uint
 void signalStartupStart() {
     DEBUG_PRINTLN_F("ALERTS: Iniciando Startup...");
     ledOn(PIN_LED_1);
-    buzzerBeep(0, 800); 
+    buzzerBeep(200, 800); 
 }
 
 /**

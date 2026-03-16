@@ -33,7 +33,7 @@ public:
     MPU9250_HAL(uint8_t i2cAddr = 0x68);
 
     // Virtual Overrides
-    bool init() override;
+    bool init(bool verbose = true, bool autoCalibrate = false) override;
     bool update() override;
     void injectData(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz) override;
 

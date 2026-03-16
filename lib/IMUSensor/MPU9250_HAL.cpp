@@ -13,8 +13,8 @@ MPU9250_HAL::MPU9250_HAL(uint8_t i2cAddr) : _i2cAddr(i2cAddr) {
  * @brief Initialize the hardware and load saved calibration if available.
  * @return true if communication and setup were successful.
  */
-bool MPU9250_HAL::init() {
-    DEBUG_PRINTLN_F("Initializing MPU from HAL...");
+bool MPU9250_HAL::init(bool verbose, bool autoCalibrate) {
+    if (verbose) DEBUG_PRINTLN_F("Initializing MPU from HAL...");
     // Record the flight configuration
     _mpuConfig.accel_fs_sel = ACCEL_FS_SEL::A16G;
     _mpuConfig.gyro_fs_sel = GYRO_FS_SEL::G2000DPS;
@@ -27,6 +27,25 @@ bool MPU9250_HAL::init() {
 
     bool success = _mpu.setup(_i2cAddr, _mpuConfig);
     if (success) {
+        if (autoCalibrate) {
+            if (ERASE_CALIB_ON_STARTUP) {
+                eraseCalibration();
+                DEBUG_PRINTLN_F("BOOT: Erasing IMU calibration from EEPROM...");
+            }
+
+            if (ERASE_CALIB_ON_STARTUP || !hasCalibrationData()) {
+                runFullCalibration(PRINT_IMU_PARAMS, PERFORM_FINE_TUNING, PHYSICAL_Z_AXIS_DOWN);
+            } else {
+                if (PERFORM_FINE_TUNING) {
+                    DEBUG_PRINTLN_F("Performing iterative Fine-Tuning update...");
+                    adjustCalibrationIteratively(50, true, CALIBRATION_ACCEL_TOL_G, CALIBRATION_GYRO_TOL_DPS, CALIBRATION_MAX_ITERATIONS, PHYSICAL_Z_AXIS_DOWN);
+                }
+            }
+            
+            // Final re-init to seat registers properly (warm-up)
+            return init(false, false); 
+        }
+
         clearHardwareOffsets(); // Ensure hardware starts fresh
         if (hasCalibrationData()) {
             loadCalibration(false);
@@ -40,10 +59,6 @@ bool MPU9250_HAL::init() {
  * This effectively sets the internal bias to zero.
  */
 void MPU9250_HAL::clearHardwareOffsets() {
-    // Manually write 0 to all offset registers to ensure a clean state
-    // Note: Gyro offsets are 0 at boot, but Accel offsets contain factory trim.
-    // However, the library's write_accel_offset handles the factory trim preservation.
-    // So "clearing" here means setting the library's internal bias to 0 and pushing.
     _mpu.setAccBias(0, 0, 0);
     _mpu.setGyroBias(0, 0, 0);
 }
@@ -160,6 +175,7 @@ void MPU9250_HAL::saveCalibration(bool printDebug) {
  * @brief Invalidate calibration in EEPROM.
  */
 void MPU9250_HAL::eraseCalibration() {
+    DEBUG_PRINTLN_F("BOOT: Erasing IMU calibration from EEPROM...");
     EEPROM.write(0, 0xFF); // Invalidate magic number
     EEPROM.commit();
 }
@@ -341,7 +357,7 @@ bool MPU9250_HAL::adjustCalibrationIteratively(int samples_per_iteration, bool p
     }
 
     DEBUG_PRINTLN_F(" Done.");
-    init(); // Restore final flight config
+    init(false); // Restore final flight config silently
     return calibrated;
 }
 
@@ -352,33 +368,36 @@ bool MPU9250_HAL::adjustCalibrationIteratively(int samples_per_iteration, bool p
  * @param physicalZAxisDown Orientation parameter for gravity removal.
  */
 void MPU9250_HAL::runFullCalibration(bool printDebug, bool performFineTuning, bool physicalZAxisDown) {
-    if (printDebug) {
-        DEBUG_PRINTLN_F("\n--- FULL IMU CALIBRATION ---");
-        DEBUG_PRINTLN_F("1. Accel/Gyro: Keep rocket STILL and LEVEL.");
-    }
+    // ALWAYS print progress for full calibration to avoid user confusion
+    DEBUG_PRINTLN_F("\n--- [STEP 1/3] BASE IMU CALIBRATION ---");
+    DEBUG_PRINTLN_F("Keep rocket STILL and LEVEL on the pad...");
     
+    clearHardwareOffsets(); // Start from absolute zero
     delay(2000);
-    _mpu.verbose(printDebug);
-    _mpu.calibrateAccelGyro(physicalZAxisDown); // Combined calibration
 
-    if (printDebug) {
-        DEBUG_PRINTLN_F("2. Magnetometer: Move rocket in FIGURE-EIGHT pattern!");
-    }
-    delay(2000);
-    calibrateMag();
+    _mpu.verbose(printDebug);
+    _mpu.calibrateAccelGyro(physicalZAxisDown); // Combined library calib
     _mpu.verbose(false);
 
-    saveCalibration(printDebug); 
-    if (printDebug) DEBUG_PRINTLN_F("Base calibration saved.");
+    float base_acc[3] = {_mpu.getAccBiasX(), _mpu.getAccBiasY(), _mpu.getAccBiasZ()};
+    float base_gyro[3] = {_mpu.getGyroBiasX(), _mpu.getGyroBiasY(), _mpu.getGyroBiasZ()};
+    printVector("  Step 1 Result - Accel Bias", base_acc, 1.0f, 2, "LSB");
+    printVector("  Step 1 Result - Gyro Bias", base_gyro, 1.0f, 2, "LSB");
+
+    DEBUG_PRINTLN_F("\n--- [STEP 2/3] MAGNETOMETER CALIBRATION ---");
+    DEBUG_PRINTLN_F("Move rocket in FIGURE-EIGHT pattern (Starting in 2s)...");
+    delay(2000);
+    calibrateMag();
+    
+    saveCalibration(true); 
+    DEBUG_PRINTLN_F("Base calibration (Step 1 & 2) saved to EEPROM.");
 
     if (performFineTuning) {
-        if (printDebug) {
-            DEBUG_PRINTLN_F("3. Fine Tuning: Keep STILL again.");
-        }
+        DEBUG_PRINTLN_F("\n--- [STEP 3/3] ITERATIVE FINE TUNING ---");
+        DEBUG_PRINTLN_F("Keep STILL again for high-precision bias tracking...");
         delay(2000);
         float accel_tol_g = CALIBRATION_ACCEL_TOL_G;
         float gyro_tol_dps = CALIBRATION_GYRO_TOL_DPS;
-        // Force printDebug to true here so user sees the iterative progress
         adjustCalibrationIteratively(50, true, accel_tol_g, gyro_tol_dps, CALIBRATION_MAX_ITERATIONS, physicalZAxisDown);
     }
 }

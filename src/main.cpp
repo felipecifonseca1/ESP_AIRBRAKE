@@ -26,6 +26,7 @@
 #include "Sinalizacao.h"
 #include <ArduinoEigenDense.h>
 #include <rom/rtc.h> // For reset reason
+#include "Config_voo.h" 
 
 #define EEPROM_SIZE 256 // Define EEPROM size
 
@@ -222,26 +223,9 @@ void setup() {
   // IMU Setup
   if (isCrashRecovery) {
       DEBUG_PRINTLN_F("BOOT: Skipping IMU Calibration for Recovery.");
-      verifyModule(flightIMU.init(), "IMU"); 
+      verifyModule(flightIMU.init(true, false), "IMU"); 
   } else {
-      if (ERASE_CALIB_ON_STARTUP) {
-          flightIMU.eraseCalibration(); 
-          DEBUG_PRINTLN_F("BOOT: EEPROM Wiped, forcing calibration...");
-      }
-      
-      verifyModule(flightIMU.init(), "IMU");
-      
-      if (ERASE_CALIB_ON_STARTUP || !flightIMU.hasCalibrationData()) {
-          flightIMU.runFullCalibration(PRINT_IMU_PARAMS, PERFORM_FINE_TUNING, PHYSICAL_Z_AXIS_DOWN);
-      } else {
-          flightIMU.loadCalibration(PRINT_IMU_PARAMS);
-          if (PERFORM_FINE_TUNING) {
-              DEBUG_PRINTLN_F("Performing iterative Fine-Tuning update...");
-              float accel_tol_g = 0.0025;
-              float gyro_tol_dps = 0.025;
-              flightIMU.adjustCalibrationIteratively(50, true, accel_tol_g, gyro_tol_dps, 30, PHYSICAL_Z_AXIS_DOWN);
-          }
-      }
+      verifyModule(flightIMU.init(true, true), "IMU"); 
   }
 
   // Sensors or HIL setup

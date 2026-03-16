@@ -1,10 +1,34 @@
 {
    "widgets": [
       {
+         "type": "single_value_number",
+         "gridPos": {
+            "h": 2,
+            "w": 12,
+            "x": 0,
+            "y": 0
+         },
+         "series": [
+            {
+               "name": "Max_Alt",
+               "sourceNames": [
+                  "Max_Alt"
+               ],
+               "formula": "",
+               "options": {
+                  "stroke": "rgba(231,76,60,1)",
+                  "fill": "rgba(231,76,60,0.1)"
+               },
+               "type": "number"
+            }
+         ],
+         "precision_mode": 0
+      },
+      {
          "type": "chart",
          "gridPos": {
-            "h": 6,
-            "w": 6,
+            "h": 4,
+            "w": 12,
             "x": 0,
             "y": 0
          },
@@ -17,7 +41,7 @@
                "formula": "",
                "options": {
                   "_serie": "FlightState",
-                  "_id": "data-serie-36",
+                  "_id": "data-serie-27",
                   "stroke": "rgba(231,76,60,1)",
                   "fill": "rgba(231,76,60,0.1)"
                },
@@ -28,7 +52,7 @@
       {
          "type": "chart",
          "gridPos": {
-            "h": 6,
+            "h": 9,
             "w": 6,
             "x": 0,
             "y": 0
@@ -42,7 +66,7 @@
                "formula": "",
                "options": {
                   "_serie": "Press",
-                  "_id": "data-serie-2",
+                  "_id": "data-serie-28",
                   "stroke": "rgba(231,76,60,1)",
                   "fill": "rgba(231,76,60,0.1)"
                },
@@ -53,7 +77,7 @@
       {
          "type": "chart",
          "gridPos": {
-            "h": 6,
+            "h": 9,
             "w": 6,
             "x": 0,
             "y": 0
@@ -67,7 +91,7 @@
                "formula": "",
                "options": {
                   "_serie": "Alt",
-                  "_id": "data-serie-7",
+                  "_id": "data-serie-29",
                   "stroke": "rgba(231,76,60,1)",
                   "fill": "rgba(231,76,60,0.1)"
                },
@@ -78,7 +102,7 @@
       {
          "type": "chart",
          "gridPos": {
-            "h": 6,
+            "h": 9,
             "w": 6,
             "x": 0,
             "y": 0
@@ -92,7 +116,7 @@
                "formula": "",
                "options": {
                   "_serie": "VelZ",
-                  "_id": "data-serie-8",
+                  "_id": "data-serie-30",
                   "stroke": "rgba(231,76,60,1)",
                   "fill": "rgba(231,76,60,0.1)"
                },
@@ -103,7 +127,7 @@
       {
          "type": "chart",
          "gridPos": {
-            "h": 6,
+            "h": 9,
             "w": 6,
             "x": 0,
             "y": 0
@@ -117,7 +141,7 @@
                "formula": "",
                "options": {
                   "_serie": "AccelZ",
-                  "_id": "data-serie-9",
+                  "_id": "data-serie-31",
                   "stroke": "rgba(231,76,60,1)",
                   "fill": "rgba(231,76,60,0.1)"
                },
@@ -128,32 +152,7 @@
       {
          "type": "chart",
          "gridPos": {
-            "h": 6,
-            "w": 6,
-            "x": 0,
-            "y": 0
-         },
-         "series": [
-            {
-               "name": "Tilt",
-               "sourceNames": [
-                  "Tilt"
-               ],
-               "formula": "",
-               "options": {
-                  "_serie": "Tilt",
-                  "_id": "data-serie-10",
-                  "stroke": "rgba(231,76,60,1)",
-                  "fill": "rgba(231,76,60,0.1)"
-               },
-               "type": "number"
-            }
-         ]
-      },
-      {
-         "type": "chart",
-         "gridPos": {
-            "h": 6,
+            "h": 7,
             "w": 12,
             "x": 0,
             "y": 0
@@ -167,7 +166,7 @@
                "formula": "",
                "options": {
                   "_serie": "AccX",
-                  "_id": "data-serie-11",
+                  "_id": "data-serie-32",
                   "stroke": "rgba(231,76,60,1)",
                   "fill": "rgba(231,76,60,0.1)"
                },
@@ -181,7 +180,7 @@
                "formula": "",
                "options": {
                   "_serie": "AccY",
-                  "_id": "data-serie-22",
+                  "_id": "data-serie-33",
                   "stroke": "rgba(52,152,219,1)",
                   "fill": "rgba(52,152,219,0.1)"
                },
@@ -195,7 +194,7 @@
                "formula": "",
                "options": {
                   "_serie": "AccZ",
-                  "_id": "data-serie-23",
+                  "_id": "data-serie-34",
                   "stroke": "rgba(46,204,113,1)",
                   "fill": "rgba(46,204,113,0.1)"
                },
@@ -206,7 +205,7 @@
       {
          "type": "chart",
          "gridPos": {
-            "h": 6,
+            "h": 7,
             "w": 12,
             "x": 0,
             "y": 0
@@ -220,7 +219,7 @@
                "formula": "",
                "options": {
                   "_serie": "GyroX",
-                  "_id": "data-serie-14",
+                  "_id": "data-serie-35",
                   "stroke": "rgba(231,76,60,1)",
                   "fill": "rgba(231,76,60,0.1)"
                },
@@ -234,7 +233,7 @@
                "formula": "",
                "options": {
                   "_serie": "GyroY",
-                  "_id": "data-serie-24",
+                  "_id": "data-serie-36",
                   "stroke": "rgba(52,152,219,1)",
                   "fill": "rgba(52,152,219,0.1)"
                },
@@ -248,9 +247,187 @@
                "formula": "",
                "options": {
                   "_serie": "GyroZ",
-                  "_id": "data-serie-25",
+                  "_id": "data-serie-37",
                   "stroke": "rgba(46,204,113,1)",
                   "fill": "rgba(46,204,113,0.1)"
+               },
+               "type": "number"
+            }
+         ]
+      },
+      {
+         "type": "chart",
+         "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 0
+         },
+         "series": [
+            {
+               "name": "MagX",
+               "sourceNames": [
+                  "MagX"
+               ],
+               "formula": "",
+               "options": {
+                  "_serie": "MagX",
+                  "_id": "data-serie-38",
+                  "stroke": "rgba(231,76,60,1)",
+                  "fill": "rgba(231,76,60,0.1)"
+               },
+               "type": "number"
+            },
+            {
+               "name": "MagY",
+               "sourceNames": [
+                  "MagY"
+               ],
+               "formula": "",
+               "options": {
+                  "_serie": "MagY",
+                  "_id": "data-serie-39",
+                  "stroke": "rgba(52,152,219,1)",
+                  "fill": "rgba(52,152,219,0.1)"
+               },
+               "type": "number"
+            },
+            {
+               "name": "MagZ",
+               "sourceNames": [
+                  "MagZ"
+               ],
+               "formula": "",
+               "options": {
+                  "_serie": "MagZ",
+                  "_id": "data-serie-40",
+                  "stroke": "rgba(46,204,113,1)",
+                  "fill": "rgba(46,204,113,0.1)"
+               },
+               "type": "number"
+            }
+         ]
+      },
+      {
+         "type": "chart",
+         "gridPos": {
+            "h": 7,
+            "w": 3,
+            "x": 0,
+            "y": 0
+         },
+         "series": [
+            {
+               "name": "qX",
+               "sourceNames": [
+                  "qX"
+               ],
+               "formula": "",
+               "options": {
+                  "_serie": "qX",
+                  "_id": "data-serie-41",
+                  "stroke": "rgba(231,76,60,1)",
+                  "fill": "rgba(231,76,60,0.1)"
+               },
+               "type": "number"
+            }
+         ]
+      },
+      {
+         "type": "chart",
+         "gridPos": {
+            "h": 7,
+            "w": 3,
+            "x": 0,
+            "y": 0
+         },
+         "series": [
+            {
+               "name": "qY",
+               "sourceNames": [
+                  "qY"
+               ],
+               "formula": "",
+               "options": {
+                  "_serie": "qY",
+                  "_id": "data-serie-42",
+                  "stroke": "rgba(231,76,60,1)",
+                  "fill": "rgba(231,76,60,0.1)"
+               },
+               "type": "number"
+            }
+         ]
+      },
+      {
+         "type": "chart",
+         "gridPos": {
+            "h": 7,
+            "w": 3,
+            "x": 0,
+            "y": 0
+         },
+         "series": [
+            {
+               "name": "qZ",
+               "sourceNames": [
+                  "qZ"
+               ],
+               "formula": "",
+               "options": {
+                  "_serie": "qZ",
+                  "_id": "data-serie-43",
+                  "stroke": "rgba(231,76,60,1)",
+                  "fill": "rgba(231,76,60,0.1)"
+               },
+               "type": "number"
+            }
+         ]
+      },
+      {
+         "type": "chart",
+         "gridPos": {
+            "h": 7,
+            "w": 3,
+            "x": 0,
+            "y": 0
+         },
+         "series": [
+            {
+               "name": "qW",
+               "sourceNames": [
+                  "qW"
+               ],
+               "formula": "",
+               "options": {
+                  "_serie": "qW",
+                  "_id": "data-serie-44",
+                  "stroke": "rgba(231,76,60,1)",
+                  "fill": "rgba(231,76,60,0.1)"
+               },
+               "type": "number"
+            }
+         ]
+      },
+      {
+         "type": "chart",
+         "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 0
+         },
+         "series": [
+            {
+               "name": "Tilt",
+               "sourceNames": [
+                  "Tilt"
+               ],
+               "formula": "",
+               "options": {
+                  "_serie": "Tilt",
+                  "_id": "data-serie-45",
+                  "stroke": "rgba(231,76,60,1)",
+                  "fill": "rgba(231,76,60,0.1)"
                },
                "type": "number"
             }
@@ -266,67 +443,14 @@
          },
          "series": [
             {
-               "name": "MagX",
+               "name": "Servo",
                "sourceNames": [
-                  "MagX"
+                  "Servo"
                ],
                "formula": "",
                "options": {
-                  "_serie": "MagX",
-                  "_id": "data-serie-17",
-                  "stroke": "rgba(231,76,60,1)",
-                  "fill": "rgba(231,76,60,0.1)"
-               },
-               "type": "number"
-            },
-            {
-               "name": "MagY",
-               "sourceNames": [
-                  "MagY"
-               ],
-               "formula": "",
-               "options": {
-                  "_serie": "MagY",
-                  "_id": "data-serie-27",
-                  "stroke": "rgba(52,152,219,1)",
-                  "fill": "rgba(52,152,219,0.1)"
-               },
-               "type": "number"
-            },
-            {
-               "name": "MagZ",
-               "sourceNames": [
-                  "MagZ"
-               ],
-               "formula": "",
-               "options": {
-                  "_serie": "MagZ",
-                  "_id": "data-serie-28",
-                  "stroke": "rgba(46,204,113,1)",
-                  "fill": "rgba(46,204,113,0.1)"
-               },
-               "type": "number"
-            }
-         ]
-      },
-      {
-         "type": "chart",
-         "gridPos": {
-            "h": 6,
-            "w": 6,
-            "x": 0,
-            "y": 0
-         },
-         "series": [
-            {
-               "name": "qX",
-               "sourceNames": [
-                  "qX"
-               ],
-               "formula": "",
-               "options": {
-                  "_serie": "qX",
-                  "_id": "data-serie-32",
+                  "_serie": "Servo",
+                  "_id": "data-serie-47",
                   "stroke": "rgba(231,76,60,1)",
                   "fill": "rgba(231,76,60,0.1)"
                },
@@ -344,14 +468,14 @@
          },
          "series": [
             {
-               "name": "qY",
+               "name": "Gain2",
                "sourceNames": [
-                  "qY"
+                  "Gain2"
                ],
                "formula": "",
                "options": {
-                  "_serie": "qY",
-                  "_id": "data-serie-33",
+                  "_serie": "Gain2",
+                  "_id": "data-serie-48",
                   "stroke": "rgba(231,76,60,1)",
                   "fill": "rgba(231,76,60,0.1)"
                },
@@ -369,39 +493,14 @@
          },
          "series": [
             {
-               "name": "qZ",
+               "name": "Gain2",
                "sourceNames": [
-                  "qZ"
+                  "Gain2"
                ],
                "formula": "",
                "options": {
-                  "_serie": "qZ",
-                  "_id": "data-serie-34",
-                  "stroke": "rgba(231,76,60,1)",
-                  "fill": "rgba(231,76,60,0.1)"
-               },
-               "type": "number"
-            }
-         ]
-      },
-      {
-         "type": "chart",
-         "gridPos": {
-            "h": 6,
-            "w": 6,
-            "x": 0,
-            "y": 0
-         },
-         "series": [
-            {
-               "name": "qW",
-               "sourceNames": [
-                  "qW"
-               ],
-               "formula": "",
-               "options": {
-                  "_serie": "qW",
-                  "_id": "data-serie-35",
+                  "_serie": "Gain2",
+                  "_id": "data-serie-49",
                   "stroke": "rgba(231,76,60,1)",
                   "fill": "rgba(231,76,60,0.1)"
                },
@@ -410,5 +509,5 @@
          ]
       }
    ],
-   "viewDuration": "30"
+   "viewDuration": "60"
 }

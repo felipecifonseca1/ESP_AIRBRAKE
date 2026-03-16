@@ -61,7 +61,7 @@ public:
 
   // --- Kalman & Estimator ---
   void setupKalman();
-  void runStateEstimator();
+  bool runStateEstimator();
 
   // --- State Detection Functions (Public as requested) ---
   bool detectLaunch(float verticalAcceleration, float filteredAltitude);

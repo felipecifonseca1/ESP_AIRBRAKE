@@ -8,7 +8,7 @@
 // =========================================================================
 
 #define DEBUG_SERIAL_ENABLED    1      // 1: Debug (Detailed Serial) | 0: Flight (Silent)
-#define USE_TELEPLOT            1      // 2: Full Teleplot | 1: Basic Teleplot | 0: Standard Monitor
+#define USE_TELEPLOT            2      // 2: Full Teleplot | 1: Basic Teleplot | 0: Standard Monitor
 
 // =========================================================================
 // HARDWARE PINOUT (ESP32)
@@ -41,7 +41,7 @@ constexpr float AIRBRAKE_REF_AREA_M2     = 0.02097f;   // Total cross-sectional 
 constexpr float Ts_ms                     = 20.0f;     // Control loop period [ms] (50Hz)
 constexpr float Ts                        = 0.020f;    // Control loop period [s]
 constexpr float apoggeTargetAltitude_m    = 3254.0f;   // Target mission apogee [m]
-constexpr float maxTiltAngle              = 25.0f;     // Max safety tilt for actuation [deg]
+constexpr float maxTiltAngle              = 60.0f;     // Max safety tilt for actuation [deg]
 constexpr uint32_t WDT_TIMEOUT_MS         = 5000;      // Watchdog timeout in milliseconds
 constexpr bool useRecovery                = false;     // Enable recovery sequence logic
 
@@ -61,7 +61,7 @@ constexpr uint32_t SD_WRITE_TIMEOUT_MS    = 80;     // Max time allowed for sing
 constexpr uint8_t LOG_SYNC_INTERVAL       = 1;         // Data sync: 1: Safe | 10: Balanced | 50: Fast
 
 // --- HIL (Hardware-In-the-Loop) ---
-constexpr bool HIL_MODE_ACTIVE               = true;  // Enable serial-in sensor simulation
+constexpr bool HIL_MODE_ACTIVE               = false;  // Enable serial-in sensor simulation
 constexpr char HIL_FILENAME[]                = "/Teste_HIL_Sensors_no_bias.csv";
 constexpr uint32_t HIL_STABILIZATION_MS      = 15000; // Time to wait for estimator to settle [ms]
 
@@ -167,7 +167,8 @@ constexpr int   CALIBRATION_MAX_ITERATIONS           = 30;      // Safety limit 
 
 // --- Teleplot Macros ---
 #if USE_TELEPLOT >= 1
-    #define PRINT_STATE(stateName) DEBUG_PRINTLN_F("STATE: " stateName)
+    #define PRINT_STATE(stateName) DEBUG_PRINTLN_F(">STATE:" stateName)
+    // #define PLOT_VAR(name, val) DEBUG_PRINTF(">%s:%lu:%f|g\n", name, millis(), (float)val) // Timestamped version (Reverted)
     #define PLOT_VAR(name, val)    DEBUG_PRINT_F(">"); DEBUG_PRINT_F(name); DEBUG_PRINT_F(":"); DEBUG_PRINTLN(val)
 #else
     #define PRINT_STATE(stateName) DEBUG_PRINT_F("STATE: " stateName " | ")

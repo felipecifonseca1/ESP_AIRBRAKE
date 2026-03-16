@@ -18,7 +18,7 @@ public:
      * @brief Initializes the IMU hardware and configures settings (scales, bandwidth).
      * @return True if initialization was successful, false otherwise.
      */
-    virtual bool init() = 0;
+    virtual bool init(bool verbose = true, bool autoCalibrate = false) = 0;
 
     /**
      * @brief Polls the hardware for the latest data. Must be called rapidly in the main loop.

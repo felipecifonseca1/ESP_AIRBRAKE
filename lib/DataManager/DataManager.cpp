@@ -18,7 +18,7 @@ DataManager::DataManager() :
     _sdAvailable(false),
     _sdRecordCounter(0),
     _sdLEDCounter(0),
-    _flash(_pinCS_Flash, 0xEF40), // Generic JEDEC ID for W25Q128
+    _flash(_pinCS_Flash, &SPI), // Generic JEDEC ID for W25Q128
     _flashAddr(0),
     _flashAvailable(false),
     _currentHILMode(HILMode::NONE),
@@ -79,10 +79,10 @@ bool DataManager::setupSD() {
  * @brief Initializes the SPI Flash chip.
  */
 bool DataManager::setupFlash(bool eraseArea) {
-    if (_flash.initialize()) {
+    if (_flash.begin()) {
         _flashAvailable = true;
         _flashAddr = 0x000000;
-        if (eraseArea) _flash.chipErase();
+        if (eraseArea) _flash.eraseChip();
         return true;
     }
     _flashAvailable = false;
@@ -392,6 +392,16 @@ bool DataManager::initHIL(const char* filename) {
                 return false;
             }
             
+            // --- Orientation Guard ---
+            if (_staticHILFrame.hasFullIMU) {
+                bool csvSeemsZDown = (_staticHILFrame.accZ_ms2 < -5.0f);
+                if (csvSeemsZDown != PHYSICAL_Z_AXIS_DOWN) {
+                    DEBUG_PRINTF("[HIL WARNING] Orientation mismatch! CSV:%s | Config:%s\n", 
+                                 csvSeemsZDown ? "Z-DOWN" : "Z-UP",
+                                 PHYSICAL_Z_AXIS_DOWN ? "Z-DOWN" : "Z-UP");
+                }
+            }
+
             // // Forces gyro to zero to avoid drift
             _staticHILFrame.gyroX_rads = 0.0f;
             _staticHILFrame.gyroY_rads = 0.0f;
@@ -536,12 +546,10 @@ void DataManager::dumpCurrentLog() {
         return;
     } 
   
-  // We don't have direct access to P0 here easily without passing the BarometricSensor. 
-  // For telemetry dump, it's better to just log the raw pressure or passing P0 in RawFlightData.
-  // For now, I will comment this out to fix the build. In a future refactor, P0 should be part of RawFlightData.
-  // Serial.print("Ground Pressure (P0): ");
-  // Serial.print(getGroundPressureP0_BMP());
-  // Serial.println(" Pa");
+    // TODO: P0 should be part of RawFlightData.
+    // Serial.print("Ground Pressure (P0): ");
+    // Serial.print(getGroundPressureP0_BMP());
+    // Serial.println(" Pa");
     if (!ensureSDConnection()) {
         Serial.println("Error: SD card not accessible.");
         return;

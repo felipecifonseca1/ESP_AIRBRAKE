@@ -5,7 +5,6 @@
 #include "DataManager.h" 
 #include "DragCoefficientTable.hh"
 #include <Arduino.h>
-#include "Funcoes_suporte_IMU.h"
 #include "Sinalizacao.h"
 #include <ArduinoEigenDense.h>
 #include <math.h>
@@ -97,7 +96,7 @@ void FlightController::setupKalman() {
  * @brief Runs the state estimation logic (IMU update + Kalman Filter).
  * Can handle HIL simulation data if HIL_MODE_ACTIVE is true.
  */
-void FlightController::runStateEstimator() {
+bool FlightController::runStateEstimator() {
   bool motor_on = (_flightState == FlightState::MOTOR_ON);
   
   // Local variable for HIL data
@@ -112,7 +111,7 @@ void FlightController::runStateEstimator() {
         DataManager::getInstance().stopLogging();
         Serial.println("End of HIL simulation. Logging stopped.");
       }
-      return;
+      return false; // Simulation finished
     }
 
     _barometricPressure = hilData.barometricPressure_Pa;
@@ -143,7 +142,6 @@ void FlightController::runStateEstimator() {
       _tilt = 90 - hilData.tilt; // Convert tilt to match system definition
     }
     
-
   } else {
     // --- Real Mode: Read data from sensors ---
     _attitudeEstimator->getIMU()->update();
@@ -173,6 +171,8 @@ void FlightController::runStateEstimator() {
   Matrix<float, 2, 1> stateEstimate = _kf.getPosterioriState();
   _filteredAltitude = stateEstimate(0, 0);
   _filteredVerticalVelocity = stateEstimate(1, 0);
+
+  return true; // Data valid
 }
 
 /**
@@ -210,7 +210,9 @@ void FlightController::updateLogger(RawFlightData &data) {
  */
 void FlightController::update() {
   
-  runStateEstimator(); // Get full state estimation from Kalman Filter and Madgwick Filter
+  if (!runStateEstimator()) {
+    return; // Stop processing if HIL simulation finished
+  }
 
   // --- Recovery System Update ---
   static FlightState lastState = FlightState::SENSOR_CALIBRATION;
@@ -299,7 +301,7 @@ void FlightController::healthCheckLoop() {
 
       // System settings for wait-for-launch
       _attitudeEstimator->setDriftLearning(true); // Enable drift learning on the IMU
-      _attitudeEstimator->setFilterBeta(2.5f); // Increase filter beta for faster response during wait
+      _attitudeEstimator->setFilterBeta(30.0f); // Increase filter beta for faster response during wait
       DEBUG_PRINTLN_F("FlightLogic: Ready for Launch -> WAIT_LAUNCH.");
       _R_kf(1, 1) = 0.000001f; // Reduce velocity measurement variance for ZUKF
       
@@ -534,9 +536,20 @@ void FlightController::forceState(FlightState newState) {
  * @return true if servo setup is successful, false otherwise.
  */
 bool FlightController::setupServo() {
+  buzzerOff(); 
+#if defined(ESP32)
+  ledcDetach(PIN_BUZZER);     // Force release buzzer channel
+  ledcDetach(_pinServoAirbrake); // Force release servo pin
+#endif
+  delay(150); // Crucial: Give LEDC driver time to cleanup after tone()
+  
   DEBUG_PRINTLN_F("SETUP_SERVO: Initializing servo");
   DEBUG_PRINT_F("SETUP_SERVO: Configuring Servo on pin ");
   DEBUG_PRINTLN(_pinServoAirbrake);
+
+#if defined(ESP32)
+  gpio_reset_pin((gpio_num_t)_pinServoAirbrake);
+#endif
 
   _airbrakeServo.attach(_pinServoAirbrake, _servoMinPulse, _servoMaxPulse);
   _airbrakeServo.write(0);
@@ -971,6 +984,11 @@ void FlightController::printFullTelemetry() {
   PLOT_VAR("qX", _attitudeEstimator->getQuaternionX());
   PLOT_VAR("qY", _attitudeEstimator->getQuaternionY());
   PLOT_VAR("qZ", _attitudeEstimator->getQuaternionZ());
+  PLOT_VAR("AccelZ", _netVerticalAcceleration);
+  PLOT_VAR("Max_Alt", _maxRecordedHeight);
+  PLOT_VAR("Tilt", _tilt);
+  PLOT_VAR("TiltLimit", maxTiltAngle);
+  PLOT_VAR("Max", maxTiltAngle);
   PLOT_VAR("Press", _barometricPressure); // Pa
   PLOT_VAR("Servo", _airbrakeDeployment * 100.0f); // %
   PLOT_VAR("Gain1", _controlGain1);

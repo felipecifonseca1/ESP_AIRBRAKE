@@ -11,7 +11,7 @@
 #include <Arduino.h>
 #include <SD.h>
 #include <SPI.h>
-#include <SPIFlash.h>
+#include <SPIMemory.h>
 #include "Config_voo.h"
 
 // --- Data Structures ---
