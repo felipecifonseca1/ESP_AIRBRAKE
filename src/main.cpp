@@ -11,7 +11,6 @@
 #include <ESP32Servo.h>
 #include <SPI.h>
 #include <Wire.h>
-#include <cstdint>
 #include <esp_task_wdt.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -21,27 +20,22 @@
 #include "BMP280_HAL.h"
 #include "MPU9250_HAL.h"
 #include "AttitudeEstimator.h"
-#include "KalmanFilter.hh"
 #include "DataManager.h"
 #include "Sinalizacao.h"
 #include <ArduinoEigenDense.h>
-#include <rom/rtc.h> // For reset reason
 #include "Config_voo.h" 
 
 #define EEPROM_SIZE 256 // Define EEPROM size
 
+#include "SystemUtils.h"
 
-// Watchdog configuration
-esp_task_wdt_config_t twdt_config = {.timeout_ms = WDT_TIMEOUT_MS,
-                                     .idle_core_mask = (1 << 1), // Watch Core 1 idle task, ignore Core 0
-                                     .trigger_panic = true};
 
 // Flight State & Data
 RawFlightData flightData;
 
 // --- Hardware Instantiation ---
-BMP280_HAL flightBaro(0x76); 
-MPU9250_HAL flightIMU(0x68);
+BMP280_HAL flightBaro(I2C_ADDRESS_BARO); 
+MPU9250_HAL flightIMU(I2C_ADDRESS_IMU);
 
 // --- Dependency Injection ---
 AttitudeEstimator flightAttitude(&flightIMU);
@@ -140,77 +134,16 @@ void TaskSerialComm(void *pvParameters) {
   }
 }
 
-/**
- * @brief Helper to verify module initialization and handle errors.
- * @param success Condition to check
- * @param moduleName Name for logging
- * @param fatal If true, halts system on failure
- */
-void verifyModule(bool success, const char* moduleName, bool fatal = true) {
-    if (success) {
-        signalSuccessfullModule(moduleName);
-    } else {
-        signalFailedModule(moduleName);
-        DEBUG_PRINT_F("FATAL ERROR: Module '");
-        DEBUG_PRINT_F(moduleName);
-        if (moduleName == "SD Card") {
-            DEBUG_PRINTLN_F("' setup failed.");
-            return;
-        } else {
-            DEBUG_PRINTLN_F("' setup failed. System halted.");
-        }
-        
-        if (fatal) {
-            while (1) {
-                // Blink Fast for Error
-                ledBlink(LED_BUILTIN, 2, 100, 100); 
-                delay(500);
-            }
-        }
-    }
-}
-
-// Check reset reason and decide if we are recovering from a crash
-bool checkSystemRecovery() {
-    RESET_REASON reason = rtc_get_reset_reason(0);
-    DEBUG_PRINT_F("BOOT: Reset Reason CPU0: "); DEBUG_PRINTLN(reason);
-  
-    // RTCWDT_RTC_RESET = 1, TG0WDT_SYS_RESET = 8, SW_CPU_RESET = 12, RTCWDT_BROWN_OUT_RESET = 15
-    if (reason == TG0WDT_SYS_RESET || reason == RTCWDT_RTC_RESET || reason == RTCWDT_BROWN_OUT_RESET || reason == SW_CPU_RESET) {
-         DEBUG_PRINTLN_F("BOOT: WATCHDOG/BROWNOUT RESET DETECTED! Attempting Recovery...");
-         return true;
-    }
-    return false;
-}
-
 void setup() {
   Serial.begin(115200);
-  // Wait for Serial to connect, with timeout
-  unsigned long serialStartTime = millis();
-  while (!Serial && (millis() - serialStartTime < 4000));
-
-  DEBUG_PRINTLN_F("==== INITIALIZING AIRBRAKE SYSTEM ====");
-
-
-  if (!EEPROM.begin(EEPROM_SIZE)) {
-    DEBUG_PRINTLN_F("CRITICAL ERROR: Failed to initialize EEPROM!");
-  } else {
-    DEBUG_PRINTLN_F("EEPROM initialized successfully.");
-  }
+  SystemUtils::initCoreHardware(EEPROM_SIZE);
 
   // Recovery check
   bool isCrashRecovery = false;
   if (useRecovery) {
-    isCrashRecovery = checkSystemRecovery();
+    isCrashRecovery = SystemUtils::checkSystemRecovery();
   }
   bool recoverySuccess = false;
-
-  // Initialize basics: I2C, SPI and signaling system
-  Wire.begin();
-  Wire.setClock(400000); // Set I2C to 400kHz
-
-  setupSinalizacao();
-  signalStartupStart();
 
   // Create the Data Queue
   flightDataQueue = xQueueCreate(20, sizeof(RawFlightData));
@@ -218,14 +151,14 @@ void setup() {
   // Storage setup
   DEBUG_PRINTLN_F("Initializing SD card...");
   DataManager &logger = DataManager::getInstance();
-  verifyModule(logger.setupSD(), "SD Card", false);
+  SystemUtils::verifyModule(logger.setupSD(), "SD Card", false);
 
   // IMU Setup
   if (isCrashRecovery) {
       DEBUG_PRINTLN_F("BOOT: Skipping IMU Calibration for Recovery.");
-      verifyModule(flightIMU.init(true, false), "IMU"); 
+      SystemUtils::verifyModule(flightIMU.init(true, false), "IMU"); 
   } else {
-      verifyModule(flightIMU.init(true, true), "IMU"); 
+      SystemUtils::verifyModule(flightIMU.init(true, true), "IMU"); 
   }
 
   // Sensors or HIL setup
@@ -259,7 +192,7 @@ void setup() {
 
   } else {
     DEBUG_PRINTLN_F("Initializing BMP...");
-    verifyModule(flightBaro.init(), "BMP280"); 
+    SystemUtils::verifyModule(flightBaro.init(), "BMP280"); 
     flightBaro.calibrateGroundReference(100); // Reads n amount of times for P0
     
     // If Recovering, overwrite P0 from RTC
@@ -280,7 +213,7 @@ void setup() {
     if (!recoverySuccess) {
        DEBUG_PRINTLN_F("**** REAL FLIGHT MODE ACTIVATED ****");
        // Servo Setup
-       verifyModule(flightController.setupServo(), "Servo");
+       SystemUtils::verifyModule(flightController.setupServo(), "Servo");
        flightController.retractAirbrakes();
        delay(500); 
     } else {
@@ -304,9 +237,7 @@ void setup() {
     flightController.forceState(FlightState::WAIT_LAUNCH);
   }
 
-  DEBUG_PRINTLN("WDT: Initializing Watchdog...");
-  esp_task_wdt_reconfigure(&twdt_config);
-  DEBUG_PRINTLN("WDT: Active.");
+  SystemUtils::completeInitialization(WDT_TIMEOUT_MS);
 
   // Launch High-Priority Flight Task on Core 1
   xTaskCreatePinnedToCore(TaskFlightControl, "Flight", 8192, NULL, 5, NULL, 1);
@@ -314,9 +245,6 @@ void setup() {
   // Launch I/O Tasks on Core 0
   xTaskCreatePinnedToCore(TaskLogging, "Logging", 4096, NULL, 2, NULL, 0);
   xTaskCreatePinnedToCore(TaskSerialComm, "Serial", 4096, NULL, 3, NULL, 0);
-
-  DEBUG_PRINTLN_F("All optional setups and tests completed.");
-  signalStartupComplete();
 
   DEBUG_PRINT_F("System Ready. Initial State: ");
   DEBUG_PRINTLN((int)flightController.getFlightState());

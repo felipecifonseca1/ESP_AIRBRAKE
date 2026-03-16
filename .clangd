@@ -1,0 +1,35 @@
+CompileFlags:
+  Add: 
+    - --target=xtensa-esp32-elf
+    - -isystem
+    - C:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0
+    - -isystem
+    - C:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/xtensa-esp-elf
+    - -isystem
+    - C:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/xtensa-esp-elf/include
+    - -isystem
+    - C:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include
+    - -DARDUINO=10812
+    - -DESP32=ESP32
+    - -DARDUINO_ARCH_ESP32
+    - -D__XTENSA__
+    - -DCONFIG_IDF_TARGET_ESP32
+    - -D__LITTLE_ENDIAN__=1
+    - --include=Arduino.h
+  Remove: 
+    - -mlongcalls
+    - -mlong-calls
+    - -mdisable-hardware-atomics
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
+    - -fno-jump-tables
+    - -fstack-protector
+  Compiler: xtensa-esp32-elf-g++
+
+QueryDriver: [C:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/bin/xtensa-esp32-elf-*, **]
+
+Diagnostics:
+  Suppress: [drv_unknown_argument, drv_unknown_argument_with_suggestion, drv_unsupported_opt_for_target, ovl_no_viable_member_function_in_call]
+
+Index:
+  Background: Skip

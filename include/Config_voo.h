@@ -11,7 +11,7 @@
 #define USE_TELEPLOT            2      // 2: Full Teleplot | 1: Basic Teleplot | 0: Standard Monitor
 
 // =========================================================================
-// HARDWARE PINOUT (ESP32)
+// HARDWARE PINOUT & I2C ADDRESSES
 // =========================================================================
 
 constexpr uint8_t PIN_BUZZER    = 14;  // Piezo buzzer output
@@ -23,6 +23,9 @@ constexpr uint8_t PIN_SD_MOSI   = 23;  // SPI Master-Out Slave-In
 constexpr uint8_t PIN_SD_MISO   = 19;  // SPI Master-In Slave-Out
 constexpr uint8_t PIN_FLASH_CS  = 4;   // SPI Chip Select for External Flash
 constexpr uint8_t PIN_SERVO     = 27;  // PWM output for Airbrake Servo
+
+constexpr uint8_t I2C_ADDRESS_IMU  = 0x68; // MPU9250 I2C address
+constexpr uint8_t I2C_ADDRESS_BARO = 0x76; // BMP280 I2C address
 
 // =========================================================================
 // PHYSICAL CONSTANTS & ROCKET SPECS
@@ -57,7 +60,7 @@ constexpr bool ENABLE_DATA_LOGGING        = false;     // SD Card logging master
 constexpr char     SD_LOG_FOLDER[]        = "/REG_VOO"; 
 constexpr char     SD_LOG_BASENAME[]      = "VOO_";
 constexpr uint16_t SD_MAX_LOG_FILES       = 1000; 
-constexpr uint32_t SD_WRITE_TIMEOUT_MS    = 80;     // Max time allowed for single write [ms]
+constexpr uint32_t SD_WRITE_TIMEOUT_MS    = 80;        // Max time allowed for single write [ms]
 constexpr uint8_t LOG_SYNC_INTERVAL       = 1;         // Data sync: 1: Safe | 10: Balanced | 50: Fast
 
 // --- HIL (Hardware-In-the-Loop) ---
@@ -134,7 +137,7 @@ constexpr uint8_t TELEMETRY_PRINT_INTERVAL    = 2;     // Cycles between telemet
 constexpr float ATTITUDE_NET_ACC_VIBRATION_THRESHOLD = 0.2f;   // Vertical noise floor [m/s^2]
 constexpr float CALIBRATION_ACCEL_TOL_G              = 0.0025f; // Iterative target for Accel [g]
 constexpr float CALIBRATION_GYRO_TOL_DPS             = 0.025f;  // Iterative target for Gyro [dps]
-constexpr int   CALIBRATION_MAX_ITERATIONS           = 30;      // Safety limit for Step-3 search
+constexpr int   CALIBRATION_MAX_ITERATIONS           = 30;      // Safety limit for iterative calibration
 
 // =========================================================================
 // DEBUG MACROS
