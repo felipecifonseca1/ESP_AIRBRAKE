@@ -443,13 +443,13 @@
          },
          "series": [
             {
-               "name": "Servo",
+               "name": "Deflection",
                "sourceNames": [
-                  "Servo"
+                  "Deflection"
                ],
                "formula": "",
                "options": {
-                  "_serie": "Servo",
+                  "_serie": "Deflection",
                   "_id": "data-serie-47",
                   "stroke": "rgba(231,76,60,1)",
                   "fill": "rgba(231,76,60,0.1)"

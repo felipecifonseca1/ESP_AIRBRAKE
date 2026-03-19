@@ -1,0 +1,131 @@
+=======================================
+STABILITY TEST AT 1 MHz
+[PRINTS]
+Avg Write: 2.322 ms
+Avg Flush: 49.728 ms
+Worst Case (Write+Flush): 52.050 ms
+[PRINTF]
+Avg Write: 1.504 ms
+Avg Flush: 43.874 ms
+Worst Case (Write+Flush): 45.378 ms
+
+=======================================
+STABILITY TEST AT 4 MHz
+[PRINTS]
+Avg Write: 1.773 ms
+Avg Flush: 15.312 ms
+Worst Case (Write+Flush): 17.084 ms
+[PRINTF]
+Avg Write: 0.979 ms
+Avg Flush: 14.924 ms
+Worst Case (Write+Flush): 15.903 ms
+
+=======================================
+STABILITY TEST AT 8 MHz
+[PRINTS]
+Avg Write: 1.690 ms
+Avg Flush: 10.010 ms
+Worst Case (Write+Flush): 11.700 ms
+[PRINTF]
+Avg Write: 0.892 ms
+Avg Flush: 10.082 ms
+Worst Case (Write+Flush): 10.974 ms
+
+=======================================
+STABILITY TEST AT 16 MHz
+[PRINTS]
+Avg Write: 1.643 ms
+Avg Flush: 7.897 ms
+Worst Case (Write+Flush): 9.540 ms
+[PRINTF]
+Avg Write: 0.894 ms
+Avg Flush: 17.830 ms
+Worst Case (Write+Flush): 18.724 ms
+
+=======================================
+STABILITY TEST AT 20 MHz
+[PRINTS]
+Avg Write: 1.702 ms
+Avg Flush: 17.670 ms
+Worst Case (Write+Flush): 19.373 ms
+[PRINTF]
+Avg Write: 0.887 ms
+Avg Flush: 18.818 ms
+Worst Case (Write+Flush): 19.705 ms
+
+=======================================
+STABILITY TEST AT 24 MHz
+[PRINTS]
+Avg Write: 1.637 ms
+Avg Flush: 7.249 ms
+Worst Case (Write+Flush): 8.886 ms
+[PRINTF]
+Avg Write: 0.843 ms
+Avg Flush: 7.346 ms
+Worst Case (Write+Flush): 8.190 ms
+
+=======================================
+STABILITY TEST AT 1 MHz
+[PRINTS]
+Avg Write: 1.915 ms
+Avg Flush: 19.599 ms
+Worst Case (Write+Flush): 21.514 ms
+[PRINTF]
+Avg Write: 1.499 ms
+Avg Flush: 43.979 ms
+Worst Case (Write+Flush): 45.478 ms
+
+=======================================
+STABILITY TEST AT 4 MHz
+[PRINTS]
+Avg Write: 1.801 ms
+Avg Flush: 21.045 ms
+Worst Case (Write+Flush): 22.845 ms
+[PRINTF]
+Avg Write: 1.024 ms
+Avg Flush: 25.114 ms
+Worst Case (Write+Flush): 26.138 ms
+
+=======================================
+STABILITY TEST AT 8 MHz
+[PRINTS]
+Avg Write: 1.727 ms
+Avg Flush: 17.807 ms
+Worst Case (Write+Flush): 19.533 ms
+[PRINTF]
+Avg Write: 0.914 ms
+Avg Flush: 13.797 ms
+Worst Case (Write+Flush): 14.711 ms
+
+=======================================
+STABILITY TEST AT 16 MHz
+[PRINTS]
+Avg Write: 1.648 ms
+Avg Flush: 7.856 ms
+Worst Case (Write+Flush): 9.504 ms
+[PRINTF]
+Avg Write: 0.851 ms
+Avg Flush: 7.816 ms
+Worst Case (Write+Flush): 8.668 ms
+
+=======================================
+STABILITY TEST AT 20 MHz
+[PRINTS]
+Avg Write: 1.635 ms
+Avg Flush: 7.918 ms
+Worst Case (Write+Flush): 9.553 ms
+[PRINTF]
+Avg Write: 0.844 ms
+Avg Flush: 7.340 ms
+Worst Case (Write+Flush): 8.184 ms
+
+=======================================
+STABILITY TEST AT 24 MHz
+[PRINTS]
+Avg Write: 1.637 ms
+Avg Flush: 7.548 ms
+Worst Case (Write+Flush): 9.185 ms
+[PRINTF]
+Avg Write: 0.863 ms
+Avg Flush: 9.548 ms
+Worst Case (Write+Flush): 10.411 ms

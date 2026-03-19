@@ -10,10 +10,11 @@ CompileFlags:
     - -isystem
     - C:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include
     - -DARDUINO=10812
-    - -DESP32=ESP32
+    - -DESP32
+    - -DESP32S3
     - -DARDUINO_ARCH_ESP32
     - -D__XTENSA__
-    - -DCONFIG_IDF_TARGET_ESP32
+    - -DCONFIG_IDF_TARGET_ESP32S3
     - -D__LITTLE_ENDIAN__=1
     - --include=Arduino.h
   Remove: 
@@ -24,12 +25,14 @@ CompileFlags:
     - -fno-tree-switch-conversion
     - -fno-jump-tables
     - -fstack-protector
-  Compiler: xtensa-esp32-elf-g++
+  Compiler: C:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/bin/xtensa-esp32s3-elf-g++.exe
 
-QueryDriver: [C:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/bin/xtensa-esp32-elf-*, **]
+QueryDriver:
+  - C:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/bin/xtensa-esp32*-elf-*
+  - C:/Users/Fefon/.platformio/packages/framework-arduinoespressif32/**
 
 Diagnostics:
   Suppress: [drv_unknown_argument, drv_unknown_argument_with_suggestion, drv_unsupported_opt_for_target, ovl_no_viable_member_function_in_call]
 
 Index:
-  Background: Skip
+  Background: Build

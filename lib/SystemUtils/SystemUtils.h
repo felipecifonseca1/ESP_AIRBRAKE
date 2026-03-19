@@ -51,6 +51,17 @@ namespace SystemUtils {
      * @return True if a watchdog or brownout reset was detected.
      */
     bool checkSystemRecovery();
+    
+    /**
+     * @brief Scans the I2C bus and prints found devices to Serial.
+     */
+    void scanI2CBus();
+
+    /**
+     * @brief Forcefully detaches JTAG from GPIOs 39-42 to allow their use as normal GPIOs.
+     * @details Crucial for ESP32-S3 if using these pins for Buzzer/Servo.
+     */
+    void forceDetachJTAG();
 
 } // namespace SystemUtils
 

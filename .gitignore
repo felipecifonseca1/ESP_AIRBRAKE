@@ -3,3 +3,9 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# Clangd and Build Artifacts
+.cache/
+compile_commands.json
+build.log
+build_log.txt

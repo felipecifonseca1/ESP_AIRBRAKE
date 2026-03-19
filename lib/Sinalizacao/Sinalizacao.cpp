@@ -6,12 +6,17 @@
  * @brief Initializes the signaling system by setting up the buzzer and LED pins.
  */
 void setupSinalizacao() {
+
     pinMode(PIN_BUZZER, OUTPUT);
+    digitalWrite(PIN_BUZZER, LOW); // Ensure silent on boot
+    
     pinMode(PIN_LED_1, OUTPUT);
-    pinMode(PIN_LED_2, OUTPUT);
-    digitalWrite(PIN_BUZZER, LOW);
     digitalWrite(PIN_LED_1, LOW);
+    
+    pinMode(PIN_LED_2, OUTPUT);
     digitalWrite(PIN_LED_2, LOW);
+
+    DEBUG_PRINTLN_F("Signaling: Hardware initialized.");
 }
 
 /**
@@ -49,8 +54,10 @@ void buzzerBeep(uint16_t duration, uint16_t frequency) {
  */
 void buzzerBeeps(uint8_t numberOfBeeps, uint16_t durationBeeps, uint16_t durationPause, uint16_t frequency) {
     for (int i = 0; i < numberOfBeeps; i++) {
-        tone(PIN_BUZZER, frequency, durationBeeps); 
-        delay(durationBeeps + durationPause);
+        tone(PIN_BUZZER, frequency); 
+        delay(durationBeeps);
+        noTone(PIN_BUZZER);
+        if (i < numberOfBeeps - 1) delay(durationPause);
     }
 }
 
@@ -83,7 +90,7 @@ void ledBlink(uint8_t pin_led, uint8_t numberOfBlinks, uint16_t durationOn, uint
         digitalWrite(pin_led, HIGH);
         delay(durationOn);
         digitalWrite(pin_led, LOW);
-        if (durationOff > 0) delay(durationOff);
+        if (i < numberOfBlinks - 1) delay(durationOff);
     }
 }
 
@@ -91,9 +98,14 @@ void ledBlink(uint8_t pin_led, uint8_t numberOfBlinks, uint16_t durationOn, uint
  * @brief Signals the start of the system startup with a long beep and LED indication.
  */
 void signalStartupStart() {
-    DEBUG_PRINTLN_F("ALERTS: Iniciando Startup...");
+    DEBUG_PRINTLN_F("ALERTS: Starting Startup Sequence...");
     ledOn(PIN_LED_1);
-    buzzerBeep(200, 800); 
+    // Rising boot chime - Long and deliberate
+    tone(PIN_BUZZER, 800);  delay(500);
+    tone(PIN_BUZZER, 1000); delay(500);
+    tone(PIN_BUZZER, 1200); delay(1000);
+    noTone(PIN_BUZZER);
+    delay(400); // Wait before proceeding
 }
 
 /**
@@ -102,7 +114,12 @@ void signalStartupStart() {
  */
 void signalSuccessfullModule(const char* moduleName) {
     DEBUG_PRINT_F("ALERTS: Module [");DEBUG_PRINT_F(moduleName); DEBUG_PRINTLN_F("] OK.");
-    tone(PIN_BUZZER, 2000, 100); 
+    // Clearer double beep - Long pulses
+    tone(PIN_BUZZER, 2000); delay(600);
+    noTone(PIN_BUZZER);     delay(300);
+    tone(PIN_BUZZER, 2500); delay(600);
+    noTone(PIN_BUZZER);
+    delay(300); // Give user time to hear it
 }
 
 /**
@@ -112,7 +129,10 @@ void signalSuccessfullModule(const char* moduleName) {
 void signalFailedModule(const char* moduleName) {
     DEBUG_PRINT_F("ALERTS: FAILED Module [");DEBUG_PRINT_F(moduleName); DEBUG_PRINTLN_F("]!");
     ledOn(PIN_LED_2); 
-    tone(PIN_BUZZER, 500, 1000); 
+    // Powerful falling error tone - Very long
+    tone(PIN_BUZZER, 1000); delay(500);
+    tone(PIN_BUZZER, 600);  delay(1000);
+    noTone(PIN_BUZZER);
 }
 
 /**
@@ -120,6 +140,10 @@ void signalFailedModule(const char* moduleName) {
  */
 void signalStartupComplete() {
     DEBUG_PRINTLN_F("ALERTS: System READY.");
+    // Success multiple beeps - Grand finale
+    tone(PIN_BUZZER, 1500); delay(600);
+    tone(PIN_BUZZER, 2000); delay(600);
+    tone(PIN_BUZZER, 3000); delay(1000);
+    noTone(PIN_BUZZER);
     ledOn(PIN_LED_1);
-    tone(PIN_BUZZER, 3000, 200); 
 }

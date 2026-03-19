@@ -9,7 +9,8 @@
 #define DATA_MANAGER_H
 
 #include <Arduino.h>
-#include <SD.h>
+#include <FS.h>
+#include <SD_MMC.h>
 #include <SPI.h>
 #include <SPIMemory.h>
 #include "Config_voo.h"
@@ -45,7 +46,7 @@ struct RawFlightData {
     float tilt; 
     float barometricPressure;
     int16_t airbrakeDeployment;
-    float gain1, gain2;
+    float pid_gain, cd_gain;
     uint8_t flightState;
 };
 
@@ -109,7 +110,7 @@ public:
     void dumpCurrentLog();
     void clearAllLogs();
     void receiveHILFile(const char* HILFileName);
-    void runFrequencyTest(uint32_t freq, u_int16_t flushLimit, u_int16_t numberOfRecords, bool onlyPrintf = true);
+    void runFrequencyTest(uint32_t freq, u_int16_t flushLimit, u_int16_t numberOfRecords, bool onlyPrintf = true, bool oneBitMode = false);
     void runStrategyBenchmark(uint32_t freq, u_int16_t numberOfRecords);
 
     // --- State getters ---
@@ -156,20 +157,23 @@ private:
     bool _sdAvailable;
     uint8_t _sdRecordCounter;
     uint8_t _sdLEDCounter;
-    const uint32_t PRE_ALLOC_SIZE = 20 * 1024 * 1024; // 20 Mb files
+    const uint32_t PRE_ALLOC_SIZE = 20 * 1024 * 1024; // TODO: implement pre-allocation of 20 Mb files 
     const uint32_t _sdWriteTimeoutMs = SD_WRITE_TIMEOUT_MS;
 
-    // Pins VSPI
-    const u_int8_t _pinCS_SD = PIN_SD_CS; 
-    const u_int8_t _pinSCK_SD = PIN_SD_SCK; 
-    const u_int8_t _pinMOSI_SD = PIN_SD_MOSI; 
-    const u_int8_t _pinMISO_SD = PIN_SD_MISO; 
+    // Pins SDIO
+    const u_int8_t _pinSDIO_CLK = PIN_SDIO_CLK; 
+    const u_int8_t _pinSDIO_CMD = PIN_SDIO_CMD; 
+    const u_int8_t _pinSDIO_D0  = PIN_SDIO_D0; 
+    const u_int8_t _pinSDIO_D1  = PIN_SDIO_D1; 
+    const u_int8_t _pinSDIO_D2  = PIN_SDIO_D2; 
+    const u_int8_t _pinSDIO_D3  = PIN_SDIO_D3; 
+    const u_int8_t _pinSDIO_DET = PIN_SDIO_DET; 
     
     // Flash SPI
-    SPIFlash _flash;
+    const u_int8_t _pinCS_Flash = PIN_FLASH_CS;
+    SPIFlash *_flash;
     uint32_t _flashAddr;
     bool _flashAvailable;
-    const u_int8_t _pinCS_Flash = PIN_FLASH_CS;
 
     // Stabilization variables
     bool _hilStabilizing;             // Flag to indicate stabilization state

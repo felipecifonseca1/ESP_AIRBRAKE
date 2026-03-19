@@ -8,7 +8,6 @@
 
 #include <Arduino.h>
 #include <EEPROM.h>
-#include <ESP32Servo.h>
 #include <SPI.h>
 #include <Wire.h>
 #include <esp_task_wdt.h>
@@ -24,10 +23,9 @@
 #include "Sinalizacao.h"
 #include <ArduinoEigenDense.h>
 #include "Config_voo.h" 
+#include "SystemUtils.h"
 
 #define EEPROM_SIZE 256 // Define EEPROM size
-
-#include "SystemUtils.h"
 
 
 // Flight State & Data
@@ -54,8 +52,12 @@ void TaskFlightControl(void *pvParameters) {
   TickType_t xLastWakeTime = xTaskGetTickCount();
   const TickType_t xFrequency = pdMS_TO_TICKS(Ts_ms); // 20ms
 
+  static uint16_t ledCounter = 0;
   for (;;) {
-
+    if (++ledCounter >= 5) {
+      digitalWrite(PIN_LED_1, !digitalRead(PIN_LED_1));
+      ledCounter = 0;
+    }
     flightController.update(); // Update state machine and estimator 
 
     RawFlightData snapshot;
@@ -93,39 +95,39 @@ void TaskSerialComm(void *pvParameters) {
       esp_task_wdt_reset();
 
       if (cmd == 'd' || cmd == 'D') {
-        Serial.println("Command received: Dump Log");
+        DEBUG_PRINTLN_F("Command received: Dump Log");
         logger.dumpCurrentLog();
         logger.stopLogging();
       }
       if (cmd == 'h' || cmd == 'H') {
-        Serial.println("Command received: Load HIL File");
+        DEBUG_PRINTLN_F("Command received: Load HIL File");
         logger.stopLogging();
         logger.receiveHILFile(HIL_FILENAME);
       }
 
       if (cmd == 'l' || cmd == 'L') {
-        Serial.println("Command received: List Files");
+        DEBUG_PRINTLN_F("Command received: List Files");
         logger.listFiles();
       }
 
       if (cmd == 'c' || cmd == 'C') {
-        Serial.println("Command received: Clear All Logs");
+        DEBUG_PRINTLN_F("Command received: Clear All Logs");
         logger.clearAllLogs();
       }
 
       if (cmd == 'p' || cmd == 'P') {
-        Serial.println("Command received: Stop Logging");
+        DEBUG_PRINTLN_F("Command received: Stop Logging");
         logger.stopLogging();
       }
 
       if (cmd == 'w' || cmd == 'W') {
-        Serial.println("Command received: Software Reset (Simulated Crash in 2s)...");
+        DEBUG_PRINTLN_F("Command received: Software Reset (Simulated Crash in 2s)...");
         delay(2000); 
         esp_restart(); 
       }
 
       if (cmd == 'b' || cmd == 'B') {
-         Serial.println("Command received: Force Burnout State");
+         DEBUG_PRINTLN_F("Command received: Force Burnout State");
          flightController.forceState(FlightState::BURNOUT);
       }
     }
@@ -136,8 +138,10 @@ void TaskSerialComm(void *pvParameters) {
 
 void setup() {
   Serial.begin(115200);
+  // Non-blocking Serial is set in SystemUtils::initCoreHardware
   SystemUtils::initCoreHardware(EEPROM_SIZE);
 
+  // ! Do more recovery tests
   // Recovery check
   bool isCrashRecovery = false;
   if (useRecovery) {
@@ -152,6 +156,8 @@ void setup() {
   DEBUG_PRINTLN_F("Initializing SD card...");
   DataManager &logger = DataManager::getInstance();
   SystemUtils::verifyModule(logger.setupSD(), "SD Card", false);
+
+
 
   // IMU Setup
   if (isCrashRecovery) {
@@ -230,7 +236,7 @@ void setup() {
   DEBUG_PRINTLN_F("Initializing Kalman Filter...");
   flightController.setupKalman();
 
-  Serial.flush();
+  // Serial.flush() removed to prevent blocking on boot if monitor is closed
 
   if (HIL_MODE_ACTIVE) {
     DEBUG_PRINTLN("HIL Mode: Forcing state to WAIT_LAUNCH");

@@ -1,8 +1,6 @@
 #include "FlightController.h"
 #include "AltitudeSpeedTable.hh"
 #include "DataManager.h"
-#include "FlightController.h"
-#include "DataManager.h" 
 #include "DragCoefficientTable.hh"
 #include <Arduino.h>
 #include "Sinalizacao.h"
@@ -109,7 +107,7 @@ bool FlightController::runStateEstimator() {
     if (!hilData.valid) {
       if (DataManager::getInstance().isLoggingActive()) {
         DataManager::getInstance().stopLogging();
-        Serial.println("End of HIL simulation. Logging stopped.");
+        DEBUG_PRINTLN_F("End of HIL simulation. Logging stopped.");
       }
       return false; // Simulation finished
     }
@@ -171,6 +169,11 @@ bool FlightController::runStateEstimator() {
   Matrix<float, 2, 1> stateEstimate = _kf.getPosterioriState();
   _filteredAltitude = stateEstimate(0, 0);
   _filteredVerticalVelocity = stateEstimate(1, 0);
+  
+  // Update max recorded height for real-time telemetry
+  if (_filteredAltitude > _maxRecordedHeight) {
+    _maxRecordedHeight = _filteredAltitude;
+  }
 
   return true; // Data valid
 }
@@ -200,8 +203,8 @@ void FlightController::updateLogger(RawFlightData &data) {
   data.tilt = _tilt;
   data.barometricPressure = _barometricPressure; 
   data.airbrakeDeployment = _airbrakeDeployment * 100;
-  data.gain1 = _controlGain1;
-  data.gain2 = _controlGain2;
+  data.pid_gain = _pid_gain;
+  data.cd_gain = _cd_gain;
   data.flightState = static_cast<uint8_t>(_flightState);
 }
 
@@ -269,7 +272,9 @@ void FlightController::update() {
  * @brief Loop for SENSOR_CALIBRATION state. Checks for calibration data.
  */
 void FlightController::calibrationCheckLoop() {
-  DEBUG_PRINTLN_F("STATE: Sensor Calibration");
+  // Throttle: only print once per second (50 cycles at 20ms)
+  static uint8_t calPrintCtr = 0;
+  if (++calPrintCtr >= 50) { DEBUG_PRINTLN_F("STATE: Sensor Calibration"); calPrintCtr = 0; }
 
   MPU9250_HAL* hal = static_cast<MPU9250_HAL*>(_attitudeEstimator->getIMU());
   if (hal->hasCalibrationData() && baro->getGroundPressureP0() != 101325.0f) {
@@ -283,7 +288,9 @@ void FlightController::calibrationCheckLoop() {
  * @brief Loop for HEALTH_CHECK state. Verifies sensor health before launch.
  */
 void FlightController::healthCheckLoop() {
-  DEBUG_PRINTLN_F("State: Health Check");
+  // Throttle: only print once per second (50 cycles at 20ms)
+  static uint8_t hcPrintCtr = 0;
+  if (++hcPrintCtr >= 50) { DEBUG_PRINTLN_F("State: Health Check"); hcPrintCtr = 0; }
 
   baro->recalibrateGroundPressure(_barometricPressure);
 
@@ -293,7 +300,7 @@ void FlightController::healthCheckLoop() {
     DEBUG_PRINTLN(_healthCheckCount);
 
     if (_healthCheckCount >=_reqHealthChecks) { 
-      Serial.println("HEALTH CHECK: Consecutive checks OK. Transitioning...");
+      DEBUG_PRINTLN_F("HEALTH CHECK: Consecutive checks OK. Transitioning...");
       signalSuccessfullModule("Health Check Complete");
 
       _flightState = FlightState::WAIT_LAUNCH;
@@ -406,7 +413,7 @@ void FlightController::airbrakeDeploymentLoop() {
     PLOT_VAR("Alt", _filteredAltitude);
     PLOT_VAR("VelZ", _filteredVerticalVelocity);
     PLOT_VAR("Tilt", _tilt);
-    PLOT_VAR("Deflection", _airbrakeDeployment);
+    PLOT_VAR("Deflection", _airbrakeDeployment * 100.0f);
 #if USE_TELEPLOT == 0
     DEBUG_PRINTLN(); // Add a newline at the end only if we are printing on one line
 #endif
@@ -417,9 +424,9 @@ void FlightController::airbrakeDeploymentLoop() {
   // Airbrake control logic
   _delta_V_ms = lookUpSpeed(_filteredAltitude) - _filteredVerticalVelocity;
 
-  _controlGain1 = _controller.computePID(0, _delta_V_ms);
-  _controlGain2 = _controller.computeCd(apoggeTargetAltitude_m, _filteredAltitude, _filteredVerticalVelocity, -G_GRAVITATIONAL_CONSTANT, RHO_AIR);
-  _controlInput = _controlGain1 + _controlGain2;
+  _pid_gain = _controller.computePID(0, _delta_V_ms);
+  _cd_gain = _controller.computeCd(apoggeTargetAltitude_m, _filteredAltitude, _filteredVerticalVelocity, -G_GRAVITATIONAL_CONSTANT, RHO_AIR);
+  _controlInput = _pid_gain + _cd_gain;
 
   if (_tilt < maxTiltAngle) {
     _airbrakeDeployment = getNearestActuation((_filteredVerticalVelocity / MACH_VELOCITY), _controlInput);
@@ -505,7 +512,11 @@ void FlightController::landingLoop() {
     DEBUG_PRINTLN_F("Operation finished. Awaiting recovery.");
   }
 
-  delay(10000); // Slow down loop in landing
+  // Non-blocking slow-down: use timestamp instead of delay(10000)
+  static uint32_t _landingLastPrint = 0;
+  if (millis() - _landingLastPrint < 10000) return;
+  _landingLastPrint = millis();
+  DEBUG_PRINTLN_F("STATE: LANDING - idle");
 }
 
 // --- Specific Methods ---
@@ -536,32 +547,29 @@ void FlightController::forceState(FlightState newState) {
  * @return true if servo setup is successful, false otherwise.
  */
 bool FlightController::setupServo() {
-  buzzerOff(); 
-#if defined(ESP32)
-  ledcDetach(PIN_BUZZER);     // Force release buzzer channel
-  ledcDetach(_pinServoAirbrake); // Force release servo pin
-#endif
-  delay(150); // Crucial: Give LEDC driver time to cleanup after tone()
+  noTone(PIN_BUZZER); 
+  digitalWrite(PIN_BUZZER, LOW);
+  delay(1500); // Massive delay to let LEDC HW settle after tones
   
-  DEBUG_PRINTLN_F("SETUP_SERVO: Initializing servo");
-  DEBUG_PRINT_F("SETUP_SERVO: Configuring Servo on pin ");
-  DEBUG_PRINTLN(_pinServoAirbrake);
-
-#if defined(ESP32)
-  gpio_reset_pin((gpio_num_t)_pinServoAirbrake);
-#endif
-
-  _airbrakeServo.attach(_pinServoAirbrake, _servoMinPulse, _servoMaxPulse);
-  _airbrakeServo.write(0);
-
-  if (_airbrakeServo.attached()) {
-    DEBUG_PRINTLN_F("SETUP_SERVO: Servo attached successfully.");
-    return true;
-  } else {
-    DEBUG_PRINT_F("ERROR: Failed to attach servo on pin ");
-    DEBUG_PRINTLN(_pinServoAirbrake);
-    return false;
+  DEBUG_PRINTLN_F("SETUP_SERVO: Attempting manual LEDC attach...");
+  
+  // Use 13-bit resolution (8191 max) for 50Hz, which is well-supported on S3
+  #if defined(ESP32)
+  if (!ledcAttach(_pinServoAirbrake, 50, 13)) {
+      DEBUG_PRINTLN_F("ERROR: LEDC attach failed!");
+      return false;
   }
+  
+  /*  --- ALTERNATIVE WAY (Using ESP32Servo Library) ---
+      _airbrakeServo.setPeriodHertz(50);
+      _airbrakeServo.attach(_pinServoAirbrake, _servoMinPulse, _servoMaxPulse);
+  */
+  #endif
+  
+  DEBUG_PRINTLN_F("SETUP_SERVO: LEDC configuration complete.");
+  commandAirbrakes(0); // Set to zero
+
+  return true;
 }
 
 /**
@@ -569,19 +577,29 @@ bool FlightController::setupServo() {
  * @param desiredPosition 0.0 to 1.0
  */
 void FlightController::commandAirbrakes(float desiredPosition) {
-  // Convert desired position to servo angle - 0 = 0° | 1.0 = 90(45°)° (full opening)
-  int anguloServo = map(desiredPosition * 100, 0, 100, 0, 90);
-  _airbrakeServo.write(anguloServo);
-  // DEBUG_PRINT_F("FLIGHT_LOGIC: Commanding airbrakes to position (0-1): ");
-  // DEBUG_PRINTLN(desiredPosition);
+  // Convert desired position to pulse width (500us to 2500us nominally for 0-180)
+  // Our config: _servoMinPulse = 560, _servoMaxPulse = 1520 (for 0-90)
+  
+  float pulse_us = _servoMinPulse + (desiredPosition * (_servoMaxPulse - _servoMinPulse));
+  
+  // Convert to 13-bit duty cycle (50Hz = 20000us period)
+  // 13 bits = 8191 counts. Duty = (pulse / 20000) * 8191
+  uint32_t duty = (pulse_us / 20000.0f) * 8191.0f;
+  
+  #if defined(ESP32)
+  ledcWrite(_pinServoAirbrake, duty);
+
+  /*  --- ALTERNATIVE WAY (Using ESP32Servo Library) ---
+      _airbrakeServo.writeMicroseconds(pulse_us); 
+  */
+  #endif
 }
 
 /**
  * @brief Commands the airbrakes to fully retracted position.
  */
 void FlightController::retractAirbrakes() {
-  _airbrakeServo.write(0);
-  // DEBUG_PRINTLN_F("FLIGHT_LOGIC: Airbrakes fully retracted.");
+  commandAirbrakes(0);
 }
 
 /**
@@ -623,12 +641,12 @@ bool FlightController::checkFlightSystemHealth(float filteredAltitude,
     DEBUG_PRINTLN(filteredVerticalVelocity);
     healthOk = false;
   }
-
-  // Servo Health Check
-  if (!_airbrakeServo.attached()) {
-    DEBUG_PRINTLN_F("FlightLogic: Health Failure - Servo connection.");
-    healthOk = false;
-  }
+  // ! Add back when a servo is connected
+  // // Servo Health Check
+  // if (!_airbrakeServo.attached()) {
+  //   DEBUG_PRINTLN_F("FlightLogic: Health Failure - Servo connection.");
+  //   healthOk = false;
+  // }
 
   if (_testServo) {
     if (millis() - _servoTestLastTime >= 500) {
@@ -949,7 +967,7 @@ bool FlightController::attemptRecovery() {
         _flightState = _rtcBackup.state;
         _maxRecordedHeight = _rtcBackup.maxAltitude;
         
-        // Adjust entry time relative to new millis() (which is small after reboot)
+        // Adjust entry time relative to new millis() 
         // Original duration = stored_timestamp - stored_entryTime
         uint32_t durationInState = _rtcBackup.timestamp - _rtcBackup.stateEntryTime;
         if (durationInState > millis()) {
@@ -990,9 +1008,9 @@ void FlightController::printFullTelemetry() {
   PLOT_VAR("TiltLimit", maxTiltAngle);
   PLOT_VAR("Max", maxTiltAngle);
   PLOT_VAR("Press", _barometricPressure); // Pa
-  PLOT_VAR("Servo", _airbrakeDeployment * 100.0f); // %
-  PLOT_VAR("Gain1", _controlGain1);
-  PLOT_VAR("Gain2", _controlGain2);
+  PLOT_VAR("Deflection", _airbrakeDeployment * 100.0f); // %
+  PLOT_VAR("PID_Gain", _pid_gain);
+  PLOT_VAR("Cd_Gain", _cd_gain);
   PLOT_VAR("FlightState", (uint8_t)_flightState);
 #endif
 }

@@ -85,9 +85,9 @@ public:
   // --- Getters for Main/Logging ---
   FlightState getFlightState() const { return _flightState; }
   float getAirbrakeDeployment() const { return _airbrakeDeployment; }
-  float getControlGain1() const { return _controlGain1; }
+  float getPIDGain() const { return _pid_gain; }
 
-  float getControlGain2() const { return _controlGain2; }
+  float getCdGain() const { return _cd_gain; }
 
   // --- Telemetry ---
   void printFullTelemetry();
@@ -143,8 +143,8 @@ private:
 
   // PID Controller
   Controller _controller;
-  float _controlGain1 = 0.0f;
-  float _controlGain2 = 0.0f;
+  float _pid_gain = 0.0f;
+  float _cd_gain = 0.0f;
   float _controlInput = 0.0f;
   float _airbrakeDeployment = 0.0f;
   float _delta_V_ms = 0.0f;

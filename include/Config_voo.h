@@ -2,30 +2,44 @@
 #define CONFIG_VOO_H
 
 #include <cstdint>
+#include <Arduino.h>
 
 // =========================================================================
 // SYSTEM DEBUG & TELEMETRY
 // =========================================================================
 
-#define DEBUG_SERIAL_ENABLED    1      // 1: Debug (Detailed Serial) | 0: Flight (Silent)
-#define USE_TELEPLOT            2      // 2: Full Teleplot | 1: Basic Teleplot | 0: Standard Monitor
+#define DEBUG_SERIAL_ENABLED 1 // 1: Debug (Detailed Serial) | 0: Flight (Silent)
+#define USE_TELEPLOT 2 // 2: Full Teleplot | 1: Basic Teleplot | 0: Standard Monitor
 
 // =========================================================================
 // HARDWARE PINOUT & I2C ADDRESSES
 // =========================================================================
 
-constexpr uint8_t PIN_BUZZER    = 14;  // Piezo buzzer output
-constexpr uint8_t PIN_LED_1     = 12;  // Status LED 1
-constexpr uint8_t PIN_LED_2     = 2;   // Status LED 2 (Built-in for most DevKits)
-constexpr uint8_t PIN_SD_CS     = 5;   // SPI Chip Select for SD Card
-constexpr uint8_t PIN_SD_SCK    = 18;  // SPI Clock
-constexpr uint8_t PIN_SD_MOSI   = 23;  // SPI Master-Out Slave-In
-constexpr uint8_t PIN_SD_MISO   = 19;  // SPI Master-In Slave-Out
-constexpr uint8_t PIN_FLASH_CS  = 4;   // SPI Chip Select for External Flash
-constexpr uint8_t PIN_SERVO     = 27;  // PWM output for Airbrake Servo
+constexpr uint8_t PIN_BUZZER              = 39; 
+constexpr uint8_t PIN_LED_1               = 10;  
+constexpr uint8_t PIN_LED_2               = 48;  
+constexpr uint8_t PIN_SERVO               = 42;  
+constexpr uint8_t PIN_SDA                 = 1;         // I2C Data
+constexpr uint8_t PIN_SCL                 = 2;         // I2C Clock
 
-constexpr uint8_t I2C_ADDRESS_IMU  = 0x68; // MPU9250 I2C address
-constexpr uint8_t I2C_ADDRESS_BARO = 0x76; // BMP280 I2C address
+// SDIO 4-bit Pins PCB
+constexpr uint8_t PIN_SDIO_CLK            = 12;
+constexpr uint8_t PIN_SDIO_CMD            = 9;
+constexpr uint8_t PIN_SDIO_D0             = 13;
+constexpr uint8_t PIN_SDIO_D1             = 14;
+constexpr uint8_t PIN_SDIO_D2             = 8;
+constexpr uint8_t PIN_SDIO_D3             = 46; 
+constexpr uint8_t PIN_SDIO_DET            = 11; 
+
+constexpr uint8_t PIN_FLASH_CS            = 255; 
+constexpr uint8_t PIN_FLASH_MOSI          = 255;
+constexpr uint8_t PIN_FLASH_MISO          = 255;
+constexpr uint8_t PIN_FLASH_SCK           = 255;
+constexpr uint8_t PIN_FLASH_WP            = 255;
+constexpr uint8_t PIN_FLASH_HOLD          = 255;
+
+constexpr uint8_t I2C_ADDRESS_IMU         = 0x68;      // MPU9250 I2C address
+constexpr uint8_t I2C_ADDRESS_BARO        = 0x76;      // BMP280 I2C address
 
 // =========================================================================
 // PHYSICAL CONSTANTS & ROCKET SPECS
@@ -47,16 +61,17 @@ constexpr float apoggeTargetAltitude_m    = 3254.0f;   // Target mission apogee 
 constexpr float maxTiltAngle              = 60.0f;     // Max safety tilt for actuation [deg]
 constexpr uint32_t WDT_TIMEOUT_MS         = 5000;      // Watchdog timeout in milliseconds
 constexpr bool useRecovery                = false;     // Enable recovery sequence logic
+constexpr bool runBusScan                 = false;     // Run I2C bus scan at startup
 
 // --- IMU & Orientation ---
-constexpr bool PHYSICAL_Z_AXIS_DOWN          = true;   // IMU Mounting: true: Z-Down | false: Z-Up
-constexpr bool CALIBRATE_IMU_ON_STARTUP      = true;   // Run library calib ONLY if data is missing
-constexpr bool PRINT_IMU_PARAMS              = false;  // Print biases to Serial at boot
-constexpr bool PERFORM_FINE_TUNING           = false;  // Run iterative bias tweak on every boot
-constexpr bool ERASE_CALIB_ON_STARTUP        = false;  // Force delete all saved IMU data
+constexpr bool PHYSICAL_Z_AXIS_DOWN       = true;      // IMU Mounting: true: Z-Down | false: Z-Up
+constexpr bool CALIBRATE_IMU_ON_STARTUP   = true;      // Run library calib ONLY if data is missing
+constexpr bool PRINT_IMU_PARAMS           = false;     // Print biases to Serial at boot
+constexpr bool PERFORM_FINE_TUNING        = false;     // Run iterative bias tweak on every boot
+constexpr bool ERASE_CALIB_ON_STARTUP     = false;     // Force delete all saved IMU data
 
 // --- SD Card & Logging ---
-constexpr bool ENABLE_DATA_LOGGING        = false;     // SD Card logging master switch
+constexpr bool ENABLE_DATA_LOGGING        = true;      // SD Card logging master switch
 constexpr char     SD_LOG_FOLDER[]        = "/REG_VOO"; 
 constexpr char     SD_LOG_BASENAME[]      = "VOO_";
 constexpr uint16_t SD_MAX_LOG_FILES       = 1000; 
@@ -64,28 +79,28 @@ constexpr uint32_t SD_WRITE_TIMEOUT_MS    = 80;        // Max time allowed for s
 constexpr uint8_t LOG_SYNC_INTERVAL       = 1;         // Data sync: 1: Safe | 10: Balanced | 50: Fast
 
 // --- HIL (Hardware-In-the-Loop) ---
-constexpr bool HIL_MODE_ACTIVE               = false;  // Enable serial-in sensor simulation
-constexpr char HIL_FILENAME[]                = "/Teste_HIL_Sensors_no_bias.csv";
-constexpr uint32_t HIL_STABILIZATION_MS      = 15000; // Time to wait for estimator to settle [ms]
+constexpr bool HIL_MODE_ACTIVE            = false;      // Enable serial-in sensor simulation
+constexpr char HIL_FILENAME[]             = "/Teste_HIL_Sensors_no_bias.csv";
+constexpr uint32_t HIL_STABILIZATION_MS   = 15000;     // Time to wait for estimator to settle [ms]
 
 // --- Servo Specs ---
-constexpr uint16_t SERVO_MIN_PULSE           = 560;    // Pulse length for 0 deg (retracted) [us]
-constexpr uint16_t SERVO_MAX_PULSE           = 1520;   // Pulse length for 90 deg (extended) [us]
+constexpr uint16_t SERVO_MIN_PULSE        = 560;       // Pulse length for 0 deg (retracted) [us]
+constexpr uint16_t SERVO_MAX_PULSE        = 1520;      // Pulse length for 90 deg (extended) [us]
 
 // =========================================================================
 // FLIGHT CONTROLLER TUNING
 // =========================================================================
 
 // --- PID Coefficients ---
-constexpr float PID_KP = 0.025f;                       // Proportional gain
-constexpr float PID_KI = 0.075f;                       // Integral gain
-constexpr float PID_KD = 0.02f;                        // Derivative gain
+constexpr float PID_KP                    = 0.025f;     // Proportional gain
+constexpr float PID_KI                    = 0.075f;     // Integral gain
+constexpr float PID_KD                    = 0.02f;      // Derivative gain
 
 // --- Kalman Filter ---
-constexpr float KALMAN_VAR_PROC_POS = 1.0f;            // Process variance: Position
-constexpr float KALMAN_VAR_PROC_VEL = 3.0f;            // Process variance: Velocity
-constexpr float KALMAN_VAR_MEAS_ALT = 1.0f;            // Measurement variance: Baro Altitude
-constexpr float KALMAN_VAR_ZUPT_VEL = 0.000001f;       // Zero-velocity update variance
+constexpr float KALMAN_VAR_PROC_POS       = 1.0f;       // Process variance: Position
+constexpr float KALMAN_VAR_PROC_VEL       = 3.0f;       // Process variance: Velocity
+constexpr float KALMAN_VAR_MEAS_ALT       = 1.0f;       // Measurement variance: Baro Altitude
+constexpr float KALMAN_VAR_ZUPT_VEL       = 0.000001f;  // Zero-velocity update variance
 
 // =========================================================================
 // FLIGHT EVENTS DETECTION
@@ -139,43 +154,48 @@ constexpr float CALIBRATION_ACCEL_TOL_G              = 0.0025f; // Iterative tar
 constexpr float CALIBRATION_GYRO_TOL_DPS             = 0.025f;  // Iterative target for Gyro [dps]
 constexpr int   CALIBRATION_MAX_ITERATIONS           = 30;      // Safety limit for iterative calibration
 
+
 // =========================================================================
 // DEBUG MACROS
 // =========================================================================
 
 #if DEBUG_SERIAL_ENABLED == 1
-    #include <Arduino.h>
 
-    #define DEBUG_PRINT(...)         Serial.print(__VA_ARGS__)
-    #define DEBUG_PRINTLN(...)       Serial.println(__VA_ARGS__)
-    #define DEBUG_PRINT_F(str)       Serial.print(F(str))
-    #define DEBUG_PRINTLN_F(str)     Serial.println(F(str))
-    
-    #if defined(__IMXRT1062__) || defined(ARDUINO_TEENSY41) || defined(ARDUINO_TEENSY40) || defined(ESP32)
-        #define DEBUG_PRINTF(fmt, ...) Serial.printf(fmt, ##__VA_ARGS__)
-    #else
-        #define DEBUG_PRINTF(fmt, ...) \
-            do { \
-                Serial.print(F("[printf not available] ")); \
-                Serial.print(F(fmt)); \
-            } while(0)
-    #endif
+#define SERIAL_CHECK (Serial.availableForWrite() > 0)
+
+#define DEBUG_PRINT(...)    if (SERIAL_CHECK) Serial.print(__VA_ARGS__)
+#define DEBUG_PRINTLN(...)  if (SERIAL_CHECK) Serial.println(__VA_ARGS__)
+#define DEBUG_PRINT_F(str)  if (SERIAL_CHECK) Serial.print(F(str))
+#define DEBUG_PRINTLN_F(str) if (SERIAL_CHECK) Serial.println(F(str))
+
+#if defined(__IMXRT1062__) || defined(ARDUINO_TEENSY41) || defined(ARDUINO_TEENSY40) || defined(ESP32)
+#define DEBUG_PRINTF(fmt, ...) if (SERIAL_CHECK) Serial.printf(fmt, ##__VA_ARGS__)
 #else
-    #define DEBUG_PRINT(...)
-    #define DEBUG_PRINTLN(...)
-    #define DEBUG_PRINT_F(str)
-    #define DEBUG_PRINTLN_F(str)
-    #define DEBUG_PRINTF(fmt, ...)
+#define DEBUG_PRINTF(fmt, ...) \
+    do { \
+        if (SERIAL_CHECK) { \
+            Serial.print(F("[printf not available] ")); \
+            Serial.print(F(fmt)); \
+        } \
+    } while (0)
+#endif
+#else
+#define DEBUG_PRINT(...)
+#define DEBUG_PRINTLN(...)
+#define DEBUG_PRINT_F(str)
+#define DEBUG_PRINTLN_F(str)
+#define DEBUG_PRINTF(fmt, ...)
 #endif
 
 // --- Teleplot Macros ---
 #if USE_TELEPLOT >= 1
     #define PRINT_STATE(stateName) DEBUG_PRINTLN_F(">STATE:" stateName)
-    // #define PLOT_VAR(name, val) DEBUG_PRINTF(">%s:%lu:%f|g\n", name, millis(), (float)val) // Timestamped version (Reverted)
-    #define PLOT_VAR(name, val)    DEBUG_PRINT_F(">"); DEBUG_PRINT_F(name); DEBUG_PRINT_F(":"); DEBUG_PRINTLN(val)
+    #define PLOT_VAR(name, val) \
+        do { if (SERIAL_CHECK) { Serial.print(F(">")); Serial.print(name); Serial.print(F(":")); Serial.println(val); } } while (0)
 #else
     #define PRINT_STATE(stateName) DEBUG_PRINT_F("STATE: " stateName " | ")
-    #define PLOT_VAR(name, val)    DEBUG_PRINT_F(name); DEBUG_PRINT_F(": "); DEBUG_PRINT(val); DEBUG_PRINT_F(" | ")
+    #define PLOT_VAR(name, val) \
+        do { if (SERIAL_CHECK) { Serial.print(name); Serial.print(F(": ")); Serial.print(val); Serial.print(F(" | ")); } } while (0)
 #endif
 
 #endif // CONFIG_VOO_H
