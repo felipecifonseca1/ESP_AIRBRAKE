@@ -95,6 +95,8 @@ void FlightController::setupKalman() {
  * Can handle HIL simulation data if HIL_MODE_ACTIVE is true.
  */
 bool FlightController::runStateEstimator() {
+  uint32_t start_us = micros();
+  uint32_t step_us;
   bool motor_on = (_flightState == FlightState::MOTOR_ON);
   
   // Local variable for HIL data
@@ -142,12 +144,19 @@ bool FlightController::runStateEstimator() {
     
   } else {
     // --- Real Mode: Read data from sensors ---
+    step_us = micros();
     _attitudeEstimator->getIMU()->update();
-    _attitudeEstimator->update(Ts);
-
-    _netVerticalAcceleration = _attitudeEstimator->getNetVerticalAcceleration();
     _barometricPressure = baro->getPressurePa();
+    _diagnostics.sensorRead_us = micros() - step_us;
+
+    step_us = micros();
+    _attitudeEstimator->update(Ts);
+    _diagnostics.imuFilter_us = micros() - step_us;
+
+    step_us = micros();
+    _netVerticalAcceleration = _attitudeEstimator->getNetVerticalAcceleration();
     _tilt = readCurrentTilt();
+    _diagnostics.navCalc_us = micros() - step_us;
   }
 
   // --- Kalman Filter Execution ---
@@ -169,13 +178,30 @@ bool FlightController::runStateEstimator() {
   Matrix<float, 2, 1> stateEstimate = _kf.getPosterioriState();
   _filteredAltitude = stateEstimate(0, 0);
   _filteredVerticalVelocity = stateEstimate(1, 0);
+  _diagnostics.kalmanUpdate_us = micros() - step_us;
   
+  // --- Update Loop Diagnostics ---
+  _diagnostics.totalExecute_us = micros() - start_us;
+  _diagnostics.totalCycles++;
+  if (_diagnostics.totalExecute_us > 20000) {
+    _diagnostics.cyclesExceeded++;
+  }
+  if (_diagnostics.totalExecute_us > _diagnostics.peakExecution_us) {
+    _diagnostics.peakExecution_us = _diagnostics.totalExecute_us;
+  }
+
   // Update max recorded height for real-time telemetry
   if (_filteredAltitude > _maxRecordedHeight) {
     _maxRecordedHeight = _filteredAltitude;
   }
 
   return true; // Data valid
+}
+
+void FlightController::resetDiagnostics() {
+  uint64_t total = _diagnostics.totalCycles;
+  uint64_t exceeded = _diagnostics.cyclesExceeded;
+  _diagnostics = {0};
 }
 
 /**
@@ -316,7 +342,7 @@ void FlightController::healthCheckLoop() {
       _attitudeEstimator->setFilterBeta(30.0f); // Increase filter beta for faster response during wait
       DEBUG_PRINTLN_F("FlightLogic: Ready for Launch -> WAIT_LAUNCH.");
       _R_kf(1, 1) = 0.000001f; // Reduce velocity measurement variance for ZUKF
-      
+      DataManager::getInstance().setDecimationFactor(10);
       _stateEntryTime = millis();
       _healthCheckCount = 0;
     }
@@ -473,7 +499,7 @@ void FlightController::forceState(FlightState newState) {
         DataManager::getInstance().startLogging(); 
         DataManager::getInstance().setDecimationFactor(10);
         _attitudeEstimator->setDriftLearning(true); 
-        _attitudeEstimator->setFilterBeta(2.5f);
+        _attitudeEstimator->setFilterBeta(30.0f);
         _R_kf(1, 1) = 0.000001f; 
         _healthCheckCount = 0;
     }

@@ -43,14 +43,6 @@ FlightController &flightController = FlightController::getInstance(&flightBaro, 
 QueueHandle_t flightDataQueue;
 SemaphoreHandle_t serialMutex;
 
-// --- Performance Metrics ---
-uint32_t loopExecTime_us = 0;
-uint32_t loopUpdate_us = 0;
-uint32_t loopQueue_us = 0;
-uint32_t loopInterval_us = 0;
-uint32_t loopPeakExec_us = 0;
-uint32_t totalLoopCount = 0;
-
 // --- Task Functions ---
 void TaskFlightControl(void *pvParameters);
 void TaskLogging(void *pvParameters);
@@ -69,23 +61,19 @@ void TaskFlightControl(void *pvParameters) {
     }
     uint32_t start_us = micros();
     static uint32_t last_start_us = 0;
-    if (last_start_us > 0) loopInterval_us = start_us - last_start_us;
+    if (last_start_us > 0) {
+      flightController.getDiagnosticsMutable().loopInterval_us = start_us - last_start_us;
+    }
     last_start_us = start_us;
 
-    uint32_t t_update_start = micros();
     flightController.update(); 
-    loopUpdate_us = micros() - t_update_start;
 
     RawFlightData snapshot;
     flightController.updateLogger(snapshot);
     
     uint32_t t_queue_start = micros();
     xQueueSend(flightDataQueue, &snapshot, 0); 
-    loopQueue_us = micros() - t_queue_start;
-
-    loopExecTime_us = micros() - start_us;
-    if (loopExecTime_us > loopPeakExec_us) loopPeakExec_us = loopExecTime_us;
-    totalLoopCount++;
+    flightController.getDiagnosticsMutable().queueSend_us = micros() - t_queue_start;
 
     esp_task_wdt_reset();                        
     vTaskDelayUntil(&xLastWakeTime, xFrequency); 
@@ -103,6 +91,9 @@ void TaskLogging(void *pvParameters) {
   for (;;) {
     // Block until data arrives in the queue
     if (xQueueReceive(flightDataQueue, &dataToLog, portMAX_DELAY) == pdPASS) {
+      uint32_t taskStart = micros();
+      IODiagnostics& ioDiag = logger.getIODiagnosticsMutable();
+      
       if (logger.isLoggingActive()) {
         logger.logFlightData(dataToLog);
       }
@@ -110,11 +101,20 @@ void TaskLogging(void *pvParameters) {
       // Offloaded Telemetry: Run at decimated rate to avoid saturating Serial
       if (++telemetryDecimation >= TELEMETRY_LOGGING_DECIMATION) {
         if (xSemaphoreTake(serialMutex, 0) == pdPASS) {
+            uint32_t telStart = micros();
             fc.printFullTelemetry(dataToLog);
+            uint32_t telDuration = micros() - telStart;
+            
+            // Average Telemetry time (Alpha = 0.1)
+            if (ioDiag.telemetryPrint_us == 0) ioDiag.telemetryPrint_us = telDuration;
+            else ioDiag.telemetryPrint_us = (ioDiag.telemetryPrint_us * 9 + telDuration) / 10;
+
             xSemaphoreGive(serialMutex);
         }
         telemetryDecimation = 0;
       }
+
+      ioDiag.totalTaskCycle_us = micros() - taskStart;
     }
     esp_task_wdt_reset();
   }
@@ -192,17 +192,43 @@ void TaskSerialComm(void *pvParameters) {
         logger.setInternalLogging(false);
       }
 
+      if (cmd == 'r' || cmd == 'R') {
+        DEBUG_PRINTLN_F("Command received: Reset Performance Metrics");
+        flightController.resetDiagnostics();
+        logger.resetIODiagnostics();
+      }
+
       if (cmd == 'm' || cmd == 'M') {
         if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(100)) == pdPASS) {
-            DEBUG_PRINTLN_F("\n--- PERFORMANCE METRICS ---");
-            DEBUG_PRINT_F("Total Loop time:  "); DEBUG_PRINT(loopExecTime_us); DEBUG_PRINTLN_F(" us");
-            DEBUG_PRINT_F("Update (Sensors): "); DEBUG_PRINT(loopUpdate_us); DEBUG_PRINTLN_F(" us");
-            DEBUG_PRINT_F("Queue Send:       "); DEBUG_PRINT(loopQueue_us); DEBUG_PRINTLN_F(" us");
-            DEBUG_PRINT_F("Peak execution:   "); DEBUG_PRINT(loopPeakExec_us); DEBUG_PRINTLN_F(" us");
-            DEBUG_PRINT_F("Loop Interval:    "); DEBUG_PRINT(loopInterval_us); DEBUG_PRINTLN_F(" us");
+            const LoopDiagnostics& diag = flightController.getDiagnostics();
+            const IODiagnostics& ioDiag = logger.getIODiagnostics();
+            
+            float successRate = (diag.totalCycles > 0) ? 
+                (1.0f - (float)diag.cyclesExceeded / diag.totalCycles) * 100.0f : 100.0f;
+
+            DEBUG_PRINTLN_F("\n--- CORE 1: FLIGHT CONTROL ---");
+            Serial.printf("Sensors Read:     %u us\n", diag.sensorRead_us);
+            Serial.printf("IMU Filter:       %u us\n", diag.imuFilter_us);
+            Serial.printf("Nav/Calculation:  %u us\n", diag.navCalc_us);
+            Serial.printf("Kalman Update:    %u us\n", diag.kalmanUpdate_us);
+            Serial.printf("Queue Send:       %u us\n", diag.queueSend_us);
+            Serial.printf("Total Execution:  %u us\n", diag.totalExecute_us);
+            Serial.printf("Peak Execution:   %u us\n", diag.peakExecution_us);
+            Serial.printf("Total Cycles:     %u\n", (uint32_t)diag.totalCycles);
+            Serial.printf("Cycles Exceeded:  %u\n", (uint32_t)diag.cyclesExceeded);
+            Serial.printf("Success Rate:     %.2f %%\n", successRate);
+
+            DEBUG_PRINTLN_F("\n--- CORE 0: I/O & LOGGING ---");
+            Serial.printf("SD (Avg Write):   %u us\n", ioDiag.sdWriteAvg_us);
+            Serial.printf("SD (Peak Hist):   %u us\n", ioDiag.maxSdWrite_us);
+            Serial.printf("Flash (Avg):      %u us\n", ioDiag.internalFlashWriteAvg_us);
+            Serial.printf("Flash (Peak):     %u us\n", ioDiag.maxInternalFlashWrite_us);
+            Serial.printf("Flash Buffer:    %u / %d\n", ioDiag.ffatBufferCount, LOG_BUFFER_SIZE_INT);
+            Serial.printf("Telemetry (Avg):  %u us\n", ioDiag.telemetryPrint_us);
+            Serial.printf("Total Task Cycle: %u us\n", ioDiag.totalTaskCycle_us);
+            
             xSemaphoreGive(serialMutex);
         }
-        loopPeakExec_us = 0; // Reset peak after printing
       }
     }
     esp_task_wdt_reset();

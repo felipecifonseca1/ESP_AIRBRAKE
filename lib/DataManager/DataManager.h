@@ -77,6 +77,18 @@ enum class HILMode {
     FULL    // 11 Columns: Time, Acc(3), Gyro(3), Mag(3), Pressure
 };
 
+struct IODiagnostics {
+    uint32_t sdWrite_us;
+    uint32_t sdWriteAvg_us;
+    uint32_t internalFlashWrite_us;
+    uint32_t internalFlashWriteAvg_us;
+    uint32_t telemetryPrint_us;
+    uint32_t totalTaskCycle_us;
+    uint32_t maxSdWrite_us;
+    uint32_t maxInternalFlashWrite_us;
+    uint16_t ffatBufferCount;
+};
+
 class DataManager {
 public:
     // Access to Singleton
@@ -135,6 +147,11 @@ public:
 
     String getCurrentFileName() const { return _currentSDFileName; }
     uint32_t getFlashAddress() const { return _flashAddr; }
+    
+    // --- Diagnostics ---
+    const IODiagnostics& getIODiagnostics() const { return _ioDiag; }
+    IODiagnostics& getIODiagnosticsMutable() { return _ioDiag; }
+    void resetIODiagnostics() { _ioDiag = {0}; }
 
     // Avoid copying the singleton
     DataManager(const DataManager&) = delete;
@@ -193,6 +210,9 @@ private:
     const u_int8_t _pinSDIO_D3  = PIN_SDIO_D3; 
     const u_int8_t _pinSDIO_DET = PIN_SDIO_DET; 
     
+    // --- Diagnostics ---
+    IODiagnostics _ioDiag = {0};
+
     // Internal Flash (FFat)
     File _internalLogFile;
     String _currentInternalFileName;
@@ -200,7 +220,7 @@ private:
     bool _internalEnabled; 
     uint32_t _ffatRecordCounter; // Records since last file close
     ScaledFlightData _ffatBuffer[LOG_BUFFER_SIZE_INT]; // RAM buffer for binary records
-    uint8_t  _ffatBufferCount;   // Current records in RAM buffer
+    uint16_t _ffatBufferCount;   // Current records in RAM buffer
     
     // Flash SPI
     const u_int8_t _pinCS_Flash = PIN_FLASH_CS;

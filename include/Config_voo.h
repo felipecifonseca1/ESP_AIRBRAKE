@@ -92,7 +92,7 @@ constexpr char     SD_LOG_BASENAME[]      = "VOO_";
 constexpr uint16_t SD_MAX_LOG_FILES       = 1000; 
 constexpr uint32_t SD_WRITE_TIMEOUT_MS    = 80;         // Max time allowed for single write [ms]
 constexpr uint8_t LOG_BUFFER_SIZE_SD      = 10;         // Records to buffer in RAM before SD write
-constexpr uint8_t LOG_BUFFER_SIZE_INT     = 50;         // Binary records to buffer before Internal Flash write
+constexpr uint16_t LOG_BUFFER_SIZE_INT    = 50;        // Binary records to buffer before Internal Flash write
 constexpr uint16_t LOG_SYNC_INTERVAL_SD   = 1;          // Sync every buffer flush
 constexpr uint16_t LOG_SYNC_INTERVAL_INT  = 500;        // Sync Internal Flash every 500 records (10s @ 50Hz)
 

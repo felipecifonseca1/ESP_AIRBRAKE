@@ -12,8 +12,24 @@
 
 
 
-// Forward Declaration
+// --- Data Structures ---
 struct RawFlightData;
+
+struct LoopDiagnostics {
+    uint32_t sensorRead_us;
+    uint32_t imuFilter_us;
+    uint32_t navCalc_us;
+    uint32_t kalmanUpdate_us;
+    uint32_t totalExecute_us;
+    uint32_t loopInterval_us;
+    uint32_t queueSend_us;
+    
+    // Statistics
+    uint64_t totalCycles;
+    uint64_t cyclesExceeded;
+    uint32_t peakExecution_us;
+};
+
 // Enum for Flight States
 enum class FlightState {
   SENSOR_CALIBRATION,
@@ -86,8 +102,10 @@ public:
   FlightState getFlightState() const { return _flightState; }
   float getAirbrakeDeployment() const { return _airbrakeDeployment; }
   float getPIDGain() const { return _pid_gain; }
-
   float getCdGain() const { return _cd_gain; }
+  const LoopDiagnostics& getDiagnostics() const { return _diagnostics; }
+  LoopDiagnostics& getDiagnosticsMutable() { return _diagnostics; }
+  void resetDiagnostics();
 
   // --- Telemetry ---
   void printFullTelemetry(const RawFlightData& data);
@@ -148,6 +166,11 @@ private:
   float _pid_gain = 0.0f;
   float _cd_gain = 0.0f;
   float _controlInput = 0.0f;
+
+  // Diagnostics
+  LoopDiagnostics _diagnostics = {0};
+
+  // State Detection Functions
   float _airbrakeDeployment = 0.0f;
   float _delta_V_ms = 0.0f;
 

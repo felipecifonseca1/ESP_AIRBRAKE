@@ -236,11 +236,22 @@ void DataManager::closeSDCard() {
     }
   }
 
-  if (_ffatAvailable && _internalLogFile) {
-      if (_ffatBufferCount > 0) {
+  if (_ffatAvailable && _ffatBufferCount > 0) {
+      if (!_internalLogFile) {
+          _internalLogFile = FFat.open(_currentInternalFileName, FILE_APPEND);
+      }
+      
+      if (_internalLogFile) {
+          DEBUG_PRINT_F("FFAT: Flushing final ");
+          DEBUG_PRINT(_ffatBufferCount);
+          DEBUG_PRINTLN_F(" records before closing.");
           _internalLogFile.write((uint8_t*)_ffatBuffer, _ffatBufferCount * sizeof(ScaledFlightData));
           _ffatBufferCount = 0;
+          _ioDiag.ffatBufferCount = 0;
       }
+  }
+
+  if (_internalLogFile) {
       _internalLogFile.close();
   }
 
@@ -354,7 +365,18 @@ void DataManager::writeToSD(const RawFlightData& data) {
 
   // Write to SD in batches to reduce bus contention
   if (_sdBufferCount >= LOG_BUFFER_SIZE_SD) {
+    uint32_t writeStart = micros();
     _logFile.print(_sdBuffer);
+    _ioDiag.sdWrite_us = micros() - writeStart;
+    
+    // Low-pass filter for average (Alpha = 0.1)
+    if (_ioDiag.sdWriteAvg_us == 0) _ioDiag.sdWriteAvg_us = _ioDiag.sdWrite_us;
+    else _ioDiag.sdWriteAvg_us = (_ioDiag.sdWriteAvg_us * 9 + _ioDiag.sdWrite_us) / 10;
+
+    if (_ioDiag.sdWrite_us > _ioDiag.maxSdWrite_us) {
+      _ioDiag.maxSdWrite_us = _ioDiag.sdWrite_us;
+    }
+
     _sdBuffer = "";
     _sdBufferCount = 0;
     
@@ -367,7 +389,7 @@ void DataManager::writeToSD(const RawFlightData& data) {
     _logFile.close();
 
     _sdLEDCounter++;
-    if (_sdLEDCounter >= 5) {
+    if (_sdLEDCounter >= 1) {
       _sdLEDCounter = 0;
       digitalWrite(PIN_LED_2, !digitalRead(PIN_LED_2));
     }
@@ -432,6 +454,7 @@ void DataManager::writeToInternal(const RawFlightData& data) {
     // Binary logging to FFat RAM Buffer
     _ffatBuffer[_ffatBufferCount] = record;
     _ffatBufferCount++;
+    _ioDiag.ffatBufferCount = _ffatBufferCount;
 
     // Write buffer to Flash in one big chunk
     if (_ffatBufferCount >= LOG_BUFFER_SIZE_INT) {
@@ -440,7 +463,18 @@ void DataManager::writeToInternal(const RawFlightData& data) {
         }
 
         if (_internalLogFile) {
+            uint32_t writeStart = micros();
             _internalLogFile.write((const uint8_t*)_ffatBuffer, _ffatBufferCount * sizeof(ScaledFlightData));
+            _ioDiag.internalFlashWrite_us = micros() - writeStart;
+            
+            // Low-pass filter for average (Alpha = 0.1)
+            if (_ioDiag.internalFlashWriteAvg_us == 0) _ioDiag.internalFlashWriteAvg_us = _ioDiag.internalFlashWrite_us;
+            else _ioDiag.internalFlashWriteAvg_us = (_ioDiag.internalFlashWriteAvg_us * 9 + _ioDiag.internalFlashWrite_us) / 10;
+
+            if (_ioDiag.internalFlashWrite_us > _ioDiag.maxInternalFlashWrite_us) {
+                _ioDiag.maxInternalFlashWrite_us = _ioDiag.internalFlashWrite_us;
+            }
+
             _ffatBufferCount = 0;
             _ffatRecordCounter += LOG_BUFFER_SIZE_INT;
         }
