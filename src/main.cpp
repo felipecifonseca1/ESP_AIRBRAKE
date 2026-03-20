@@ -41,6 +41,15 @@ FlightController &flightController = FlightController::getInstance(&flightBaro, 
 
 // --- FreeRTOS Handles ---
 QueueHandle_t flightDataQueue;
+SemaphoreHandle_t serialMutex;
+
+// --- Performance Metrics ---
+uint32_t loopExecTime_us = 0;
+uint32_t loopUpdate_us = 0;
+uint32_t loopQueue_us = 0;
+uint32_t loopInterval_us = 0;
+uint32_t loopPeakExec_us = 0;
+uint32_t totalLoopCount = 0;
 
 // --- Task Functions ---
 void TaskFlightControl(void *pvParameters);
@@ -58,14 +67,28 @@ void TaskFlightControl(void *pvParameters) {
       digitalWrite(PIN_LED_1, !digitalRead(PIN_LED_1));
       ledCounter = 0;
     }
-    flightController.update(); // Update state machine and estimator 
+    uint32_t start_us = micros();
+    static uint32_t last_start_us = 0;
+    if (last_start_us > 0) loopInterval_us = start_us - last_start_us;
+    last_start_us = start_us;
+
+    uint32_t t_update_start = micros();
+    flightController.update(); 
+    loopUpdate_us = micros() - t_update_start;
 
     RawFlightData snapshot;
     flightController.updateLogger(snapshot);
-    xQueueSend(flightDataQueue, &snapshot, 0); // Non-blocking send
+    
+    uint32_t t_queue_start = micros();
+    xQueueSend(flightDataQueue, &snapshot, 0); 
+    loopQueue_us = micros() - t_queue_start;
 
-    esp_task_wdt_reset();                        // Signal health to Watchdog
-    vTaskDelayUntil(&xLastWakeTime, xFrequency); // Wait for next 20ms cycle
+    loopExecTime_us = micros() - start_us;
+    if (loopExecTime_us > loopPeakExec_us) loopPeakExec_us = loopExecTime_us;
+    totalLoopCount++;
+
+    esp_task_wdt_reset();                        
+    vTaskDelayUntil(&xLastWakeTime, xFrequency); 
   }
 }
 
@@ -74,12 +97,23 @@ void TaskLogging(void *pvParameters) {
 
   RawFlightData dataToLog;
   DataManager &logger = DataManager::getInstance();
+  FlightController &fc = FlightController::getInstance();
+  uint8_t telemetryDecimation = 0;
 
   for (;;) {
     // Block until data arrives in the queue
     if (xQueueReceive(flightDataQueue, &dataToLog, portMAX_DELAY) == pdPASS) {
       if (logger.isLoggingActive()) {
-        logger.logDataSD(dataToLog);
+        logger.logFlightData(dataToLog);
+      }
+      
+      // Offloaded Telemetry: Run at decimated rate to avoid saturating Serial
+      if (++telemetryDecimation >= TELEMETRY_LOGGING_DECIMATION) {
+        if (xSemaphoreTake(serialMutex, 0) == pdPASS) {
+            fc.printFullTelemetry(dataToLog);
+            xSemaphoreGive(serialMutex);
+        }
+        telemetryDecimation = 0;
       }
     }
     esp_task_wdt_reset();
@@ -96,23 +130,33 @@ void TaskSerialComm(void *pvParameters) {
 
       if (cmd == 'd' || cmd == 'D') {
         DEBUG_PRINTLN_F("Command received: Dump Log");
-        logger.dumpCurrentLog();
+        logger.dumpSDCurrentLog();
         logger.stopLogging();
-      }
-      if (cmd == 'h' || cmd == 'H') {
-        DEBUG_PRINTLN_F("Command received: Load HIL File");
-        logger.stopLogging();
-        logger.receiveHILFile(HIL_FILENAME);
       }
 
       if (cmd == 'l' || cmd == 'L') {
         DEBUG_PRINTLN_F("Command received: List Files");
-        logger.listFiles();
+        logger.listSDFiles();
       }
 
       if (cmd == 'c' || cmd == 'C') {
-        DEBUG_PRINTLN_F("Command received: Clear All Logs");
-        logger.clearAllLogs();
+        DEBUG_PRINTLN_F("Command received: Clear All Logs (SD)");
+        logger.clearSDAllLogs();
+      }
+
+      if (cmd == 'f' || cmd == 'F') {
+        DEBUG_PRINTLN_F("Command received: List Internal Flash Files");
+        logger.listInternalFiles();
+      }
+
+      if (cmd == 'x' || cmd == 'X') {
+        DEBUG_PRINTLN_F("Command received: CLEAR INTERNAL FLASH (Format)");
+        logger.clearInternalFlash();
+      }
+
+      if (cmd == 'i' || cmd == 'I') {
+        DEBUG_PRINTLN_F("Command received: Dump latest internal log...");
+        logger.dumpInternalFlash(); // Defaults to -1 (latest)
       }
 
       if (cmd == 'p' || cmd == 'P') {
@@ -127,8 +171,38 @@ void TaskSerialComm(void *pvParameters) {
       }
 
       if (cmd == 'b' || cmd == 'B') {
-         DEBUG_PRINTLN_F("Command received: Force Burnout State");
-         flightController.forceState(FlightState::BURNOUT);
+        DEBUG_PRINTLN_F("Command received: Force Burnout State");
+        flightController.forceState(FlightState::BURNOUT);
+      }
+
+      if (cmd == 't' || cmd == 'T') {
+        bool newState = !flightController.isTelemetryEnabled();
+        flightController.setTelemetryEnabled(newState);
+        DEBUG_PRINT_F("Telemetry: ");
+        DEBUG_PRINTLN(newState ? "ENABLED" : "DISABLED");
+      }
+
+      if (cmd == 'y' || cmd == 'Y') {
+        DEBUG_PRINTLN_F("Command received: Internal Flash Logging ENABLED");
+        logger.setInternalLogging(true);
+      }
+
+      if (cmd == 'n' || cmd == 'N') {
+        DEBUG_PRINTLN_F("Command received: Internal Flash Logging DISABLED");
+        logger.setInternalLogging(false);
+      }
+
+      if (cmd == 'm' || cmd == 'M') {
+        if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(100)) == pdPASS) {
+            DEBUG_PRINTLN_F("\n--- PERFORMANCE METRICS ---");
+            DEBUG_PRINT_F("Total Loop time:  "); DEBUG_PRINT(loopExecTime_us); DEBUG_PRINTLN_F(" us");
+            DEBUG_PRINT_F("Update (Sensors): "); DEBUG_PRINT(loopUpdate_us); DEBUG_PRINTLN_F(" us");
+            DEBUG_PRINT_F("Queue Send:       "); DEBUG_PRINT(loopQueue_us); DEBUG_PRINTLN_F(" us");
+            DEBUG_PRINT_F("Peak execution:   "); DEBUG_PRINT(loopPeakExec_us); DEBUG_PRINTLN_F(" us");
+            DEBUG_PRINT_F("Loop Interval:    "); DEBUG_PRINT(loopInterval_us); DEBUG_PRINTLN_F(" us");
+            xSemaphoreGive(serialMutex);
+        }
+        loopPeakExec_us = 0; // Reset peak after printing
       }
     }
     esp_task_wdt_reset();
@@ -138,6 +212,9 @@ void TaskSerialComm(void *pvParameters) {
 
 void setup() {
   Serial.begin(115200);
+  delay(500); // Give serial monitor time to connect
+  
+  // Detach JTAG and initialize core hardware
   // Non-blocking Serial is set in SystemUtils::initCoreHardware
   SystemUtils::initCoreHardware(EEPROM_SIZE);
 
@@ -149,6 +226,9 @@ void setup() {
   }
   bool recoverySuccess = false;
 
+  // Create Global Mutexes
+  serialMutex = xSemaphoreCreateMutex();
+
   // Create the Data Queue
   flightDataQueue = xQueueCreate(20, sizeof(RawFlightData));
 
@@ -156,8 +236,9 @@ void setup() {
   DEBUG_PRINTLN_F("Initializing SD card...");
   DataManager &logger = DataManager::getInstance();
   SystemUtils::verifyModule(logger.setupSD(), "SD Card", false);
-
-
+  
+  DEBUG_PRINTLN_F("Initializing Internal Flash...");
+  SystemUtils::verifyModule(logger.setupInternalFlash(true), "FFat", false);
 
   // IMU Setup
   if (isCrashRecovery) {
@@ -249,8 +330,8 @@ void setup() {
   xTaskCreatePinnedToCore(TaskFlightControl, "Flight", 8192, NULL, 5, NULL, 1);
 
   // Launch I/O Tasks on Core 0
-  xTaskCreatePinnedToCore(TaskLogging, "Logging", 4096, NULL, 2, NULL, 0);
-  xTaskCreatePinnedToCore(TaskSerialComm, "Serial", 4096, NULL, 3, NULL, 0);
+  xTaskCreatePinnedToCore(TaskLogging, "Logging", 8192, NULL, 2, NULL, 0);
+  xTaskCreatePinnedToCore(TaskSerialComm, "Serial", 8192, NULL, 3, NULL, 0);
 
   DEBUG_PRINT_F("System Ready. Initial State: ");
   DEBUG_PRINTLN((int)flightController.getFlightState());

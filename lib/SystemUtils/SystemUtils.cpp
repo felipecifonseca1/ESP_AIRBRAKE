@@ -32,6 +32,7 @@ namespace SystemUtils {
 
         // Initialize buses
         Wire.begin(PIN_SDA, PIN_SCL);
+        Wire.setClock(400000); // 400kHz Fast Mode
         delay(200);
         
         if (runBusScan) {
@@ -139,6 +140,32 @@ namespace SystemUtils {
         gpio_config(&io_conf);
         #endif
         DEBUG_PRINTLN_F("System: JTAG pins detached and reset to GPIO mode.");
+    }
+
+    void checkHardwareResources() {
+        DEBUG_PRINTLN_F("\n--- HARDWARE RESOURCE CHECK ---");
+        
+        uint32_t flash_size = ESP.getFlashChipSize();
+        FlashMode_t flash_mode = ESP.getFlashChipMode();
+        uint32_t psram_size = ESP.getPsramSize();
+
+        DEBUG_PRINT_F("Internal Flash Size: ");
+        DEBUG_PRINTLN(flash_size / (1024 * 1024));
+        DEBUG_PRINT_F("Internal Flash Mode: ");
+        // 0x06 is FM_OIO on S3, but we can just use the raw value if enum is missing
+        DEBUG_PRINTLN((int)flash_mode == 6 ? "OCTAL (OPI)" : "QUAD (QIO/DIO/QOUT)");
+
+        DEBUG_PRINT_F("Internal PSRAM Size: ");
+        DEBUG_PRINTLN(psram_size / (1024 * 1024));
+        
+        if (psram_size > 0) {
+            DEBUG_PRINTLN_F("INTERNAL PSRAM DETECTED!");
+            DEBUG_PRINTLN_F("WARNING: Pins 33, 34, 35, 36, 37 are BUSY (Octal PSRAM).");
+        } else {
+            DEBUG_PRINTLN_F("No internal PSRAM detected (Pins 33-37 might be free).");
+        }
+        
+        DEBUG_PRINTLN_F("-------------------------------\n");
     }
 
 } // namespace SystemUtils

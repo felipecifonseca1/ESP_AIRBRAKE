@@ -90,7 +90,9 @@ public:
   float getCdGain() const { return _cd_gain; }
 
   // --- Telemetry ---
-  void printFullTelemetry();
+  void printFullTelemetry(const RawFlightData& data);
+  void setTelemetryEnabled(bool enabled) { _telemetryEnabled = enabled; }
+  bool isTelemetryEnabled() const { return _telemetryEnabled; }
 
   // --- Debug / HIL ---
   void forceState(FlightState newState);
@@ -220,7 +222,8 @@ private:
 
   // Loop Print Counter
   uint8_t _loopPrintCounter = 0;
-  const uint8_t _printCountLimit = TELEMETRY_PRINT_INTERVAL;
+  const uint8_t _printCountLimit = TELEMETRY_LOGGING_DECIMATION;
+  bool _telemetryEnabled = ENABLE_TELEMETRY;
 
   // --- Kalman Filter & Estimator State ---
   KalmanFilter _kf;

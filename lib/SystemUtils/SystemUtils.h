@@ -63,6 +63,11 @@ namespace SystemUtils {
      */
     void forceDetachJTAG();
 
+    /**
+     * @brief Prints detailed hardware resource information (Flash/PSRAM) to Serial.
+     */
+    void checkHardwareResources();
+
 } // namespace SystemUtils
 
 #endif // SYSTEM_UTILS_H

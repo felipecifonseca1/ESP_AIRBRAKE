@@ -11,10 +11,15 @@ DataManager &DataManager::getInstance() {
 DataManager::DataManager()
     : _loggingActive(false), _stopRequested(false), _HILLoggingActive(false),
       _decimationFactor(1), _decimationCounter(0), _sdAvailable(false),
-      _sdRecordCounter(0), _sdLEDCounter(0), _pinSDIO_DET(PIN_SDIO_DET),
+      _sdRecordCounter(0), _sdLEDCounter(0), _sdBuffer(""), _sdBufferCount(0),
+      _ffatRecordCounter(0), _ffatBufferCount(0),
+      _pinSDIO_DET(PIN_SDIO_DET),
       _pinCS_Flash(PIN_FLASH_CS), _flash(nullptr), _flashAddr(0),
       _flashAvailable(false), _currentHILMode(HILMode::NONE),
-      _hilStabilizing(false) {}
+      _hilStabilizing(false), _ffatAvailable(false),
+      _sdEnabled(ENABLE_SD_LOGGING), 
+      _internalEnabled(ENABLE_INTERNAL_LOGGING), 
+      _externalEnabled(ENABLE_EXTERNAL_LOGGING) {}
 
 // --- Initialization ---
 
@@ -27,7 +32,7 @@ DataManager::DataManager()
  */
 bool DataManager::setupSD() {
 
-  if (!ENABLE_DATA_LOGGING) {
+  if (!ENABLE_DATA_LOGGING || !ENABLE_SD_LOGGING) {
     DEBUG_PRINTLN_F("SD: Logging disabled by configuration.");
     _sdAvailable = false;
     return true;
@@ -56,7 +61,7 @@ bool DataManager::setupSD() {
         "s],AccVert[m/"
         "s^2],Tilt[°],PressBMP[Pa],Servo[%],PID_Gain,Cd_Gain,Estado");
 
-    if (LOG_SYNC_INTERVAL <= 1) {
+    if (LOG_SYNC_INTERVAL_SD <= 1) {
       _logFile.close();
       DEBUG_PRINTLN_F("SD: File created and closed (Safe Mode).");
     } else {
@@ -73,24 +78,87 @@ bool DataManager::setupSD() {
 }
 
 /**
+ * @brief Sets up internal FFat storage for binary logging.
+ */
+bool DataManager::setupInternalFlash(bool formatIfFailed) {
+    if (!ENABLE_DATA_LOGGING || !ENABLE_INTERNAL_LOGGING) {
+        DEBUG_PRINTLN_F("FFAT: Internal logging disabled by configuration.");
+        _ffatAvailable = false;
+        return true;
+    }
+    DEBUG_PRINTLN_F("FFAT: Initializing Internal Flash...");
+    
+    if (!FFat.begin(false)) {
+        if (formatIfFailed) {
+            DEBUG_PRINTLN_F("FFAT: Mount failed. Formatting...");
+            if (FFat.format()) {
+                DEBUG_PRINTLN_F("FFAT: Format success. Mounting...");
+                if (!FFat.begin()) return false;
+            } else {
+                DEBUG_PRINTLN_F("FFAT: Format FAILED.");
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+
+    DEBUG_PRINT_F("FFAT: Total: ");
+    DEBUG_PRINT(FFat.totalBytes() / 1024);
+    DEBUG_PRINT_F("KB, Free: ");
+    DEBUG_PRINTLN(FFat.freeBytes() / 1024);
+
+    // Generate indexing for files
+    char buf[32];
+    int index = 0;
+    while (index < 999) {
+        snprintf(buf, sizeof(buf), "/log_%03d.bin", index);
+        if (!FFat.exists(buf)) break;
+        index++;
+    }
+    _ffatRecordCounter = index; // Store latest index
+    _currentInternalFileName = String(buf);
+    DEBUG_PRINT_F("FFAT: Current file: ");
+    DEBUG_PRINTLN(_currentInternalFileName);
+
+    _ffatAvailable = true;
+    return true;
+}
+
+/**
  * @brief Initializes the SPI Flash chip.
  */
 bool DataManager::setupFlash(bool eraseArea) {
-  if (_pinCS_Flash == 255) {
-    DEBUG_PRINTLN_F("FLASH: Disabled (PIN 255). Skipping setup.");
-    _flashAvailable = false;
-    return true; // Consider "success" if disabled
+  DEBUG_PRINTLN_F("FLASH: Initializing SPI Flash...");
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(ESP32S3)
+  // CRITICAL WARNING: These pins are part of the internal Flash/PSRAM bus on N16R8.
+  if (_pinCS_Flash == 36 || _pinCS_Flash == 17 || _pinCS_Flash == 16) {
+    DEBUG_PRINTLN_F("FLASH: CRITICAL WARNING - INTERNAL PIN CONFLICT (N16R8)!");
   }
+#endif
 
   if (!_flash) {
     _flash = new SPIFlash(_pinCS_Flash, &SPI);
   }
 
   if (_flash && _flash->begin()) {
+    uint32_t jedec = _flash->getJEDECID();
+    DEBUG_PRINT_F("FLASH: Module Found! ID: 0x");
+    DEBUG_PRINTLN(jedec, HEX);
+
+    if (jedec == 0x000000 || jedec == 0xFFFFFF) {
+      DEBUG_PRINTLN_F("FLASH: ERROR - Invalid ID. Check wiring/pins.");
+      _flashAvailable = false;
+      return false;
+    }
+
     _flashAvailable = true;
     _flashAddr = 0x000000;
-    if (eraseArea)
+    if (eraseArea) {
+      DEBUG_PRINTLN_F("FLASH: Erasing chip (please wait)...");
       _flash->eraseChip();
+      DEBUG_PRINTLN_F("FLASH: Erase complete.");
+    }
     return true;
   }
   _flashAvailable = false;
@@ -158,47 +226,108 @@ void DataManager::setDecimationFactor(uint16_t factor) {
 void DataManager::closeSDCard() {
   if (_sdAvailable) {
     if (_logFile) {
+      if (_sdBuffer.length() > 0) {
+          _logFile.print(_sdBuffer);
+          _sdBuffer = "";
+          _sdBufferCount = 0;
+      }
       _logFile.flush();
       _logFile.close();
     }
-    DEBUG_PRINTLN_F("SD: SD_MMC card closed.");
-    // _sdAvailable = false; // Don't mark SD as unavailable, just the file
-    // closed.
-    _loggingActive = false;
   }
+
+  if (_ffatAvailable && _internalLogFile) {
+      if (_ffatBufferCount > 0) {
+          _internalLogFile.write((uint8_t*)_ffatBuffer, _ffatBufferCount * sizeof(ScaledFlightData));
+          _ffatBufferCount = 0;
+      }
+      _internalLogFile.close();
+  }
+
+  DEBUG_PRINTLN_F("LOG: SD card closed.");
+  _loggingActive = false;
+}
+
+/**
+ * @brief Forces a flush of all RAM buffers and closes/reopens files to ensure 
+ * data persistence. Safe to call during non-critical flight phases (e.g., Apogee).
+ */
+void DataManager::forceSync() {
+  if (!_loggingActive) return;
+
+  // 1. Flush and sync SD Card
+  if (_sdAvailable && _logFile) {
+      if (_sdBuffer.length() > 0) {
+          _logFile.print(_sdBuffer);
+          _sdBuffer = "";
+          _sdBufferCount = 0;
+      }
+      _logFile.flush();
+      _logFile.close();
+      
+      // Reopen to continue logging
+      _logFile = SD_MMC.open(_currentSDFileName, FILE_APPEND);
+      _sdRecordCounter = 0;
+  }
+
+  // 2. Flush and sync Internal Flash
+  if (_ffatAvailable && _internalLogFile) {
+      if (_ffatBufferCount > 0) {
+          _internalLogFile.write((uint8_t*)_ffatBuffer, _ffatBufferCount * sizeof(ScaledFlightData));
+          _ffatBufferCount = 0;
+      }
+      _internalLogFile.close();
+      
+      // Reopen to continue logging
+      _internalLogFile = FFat.open(_currentInternalFileName, FILE_APPEND);
+      _ffatRecordCounter = 0;
+  }
+
+  DEBUG_PRINTLN_F("LOG: Force sync completed.");
 }
 
 // --- Core logging logic ---
 
 /**
- * @brief Records flight data to the SD card.
- * @details This function logs the provided flight data to the SD card. It uses
- * a decimation factor to reduce the amount of data saved without altering the
- * main loop speed. The data is saved in CSV format.
- * @param data A RawFlightData struct containing the flight data to be logged.
- **/
-void DataManager::logDataSD(const RawFlightData &data) {
+ * @brief Dispatcher for flight data logging across enabled targets.
+ * @param data Flight data to log.
+ */
+void DataManager::logFlightData(const RawFlightData& data) {
   // Handle Stop Request synchronously
   if (_stopRequested) {
-    if (_loggingActive)
-      closeSDCard();
+    if (_loggingActive) closeSDCard();
     return;
   }
 
-  if (!_sdAvailable || !_loggingActive)
-    return;
+  if (!_loggingActive || _hilStabilizing) return;
 
-  // Safety check: Logic handles opening if closed
-  // if (!CLOSE_LOG_FILE_AFTER_EACH_WRITE && !_logFile) return;
-
+  // Global decimation check
   _decimationCounter++;
-
   if (_decimationCounter < _decimationFactor) {
     return; // Skip this data point
   }
-
   _decimationCounter = 0; // Reset and save now
 
+  // 1. SD Card Logging
+  if (_sdAvailable && _sdEnabled) {
+      writeToSD(data);
+  }
+
+  // 2. Internal Flash Logging
+  if (_ffatAvailable && _internalEnabled) {
+      writeToInternal(data);
+  }
+
+  // 3. External SPI Flash Logging
+  if (_flashAvailable && _externalEnabled) {
+      writeToExternal(data);
+  }
+}
+
+/**
+ * @brief Logic for writing CSV data to SD card.
+ */
+void DataManager::writeToSD(const RawFlightData& data) {
   uint32_t startTime = millis();
 
   // Ensure file is open
@@ -210,23 +339,36 @@ void DataManager::logDataSD(const RawFlightData &data) {
     }
   }
 
-  _logFile.printf("%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%.4f,%."
-                  "4f,%.4f,%.2f,%.2f,%.2f,%.2f,%.1f,%d,%.2f,%.2f,%d\n",
+  // Format row to local buffer first
+  char rowBuf[256];
+  snprintf(rowBuf, sizeof(rowBuf), "%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%.2f,%.1f,%d,%.2f,%.2f,%d\n",
                   data.timestamp, data.accX, data.accY, data.accZ, data.gyroX,
                   data.gyroY, data.gyroZ, data.magX, data.magY, data.magZ,
                   data.qW, data.qX, data.qY, data.qZ, data.filteredAltitude,
                   data.filteredVerticalVelocity, data.netVerticalAcceleration,
                   data.tilt, data.barometricPressure, data.airbrakeDeployment,
-                  data.pid_gain, data.cd_gain, data.flightState);
+                  data.pid_gain, data.cd_gain, (int)data.flightState);
 
-  _sdRecordCounter++;
-  if (_sdRecordCounter >= LOG_SYNC_INTERVAL) {
+  _sdBuffer += rowBuf;
+  _sdBufferCount++;
+
+  // Write to SD in batches to reduce bus contention
+  if (_sdBufferCount >= LOG_BUFFER_SIZE_SD) {
+    _logFile.print(_sdBuffer);
+    _sdBuffer = "";
+    _sdBufferCount = 0;
+    
+    // Increment sync record counter only on actual writes
+    _sdRecordCounter += LOG_BUFFER_SIZE_SD; 
+  }
+
+  // Periodic Sync/Close for stability
+  if (_sdRecordCounter >= LOG_SYNC_INTERVAL_SD) {
     _logFile.close();
 
     _sdLEDCounter++;
     if (_sdLEDCounter >= 5) {
       _sdLEDCounter = 0;
-      // Non-blocking toggle
       digitalWrite(PIN_LED_2, !digitalRead(PIN_LED_2));
     }
 
@@ -245,20 +387,171 @@ void DataManager::logDataSD(const RawFlightData &data) {
     DEBUG_PRINTLN_F(" ms");
     DEBUG_PRINTLN_F("SD: Disabling Logging for Safety.");
 
-    // Force close if still open to try and save state, then disable
-    if (_logFile)
-      _logFile.close();
-    _loggingActive = false;
-    _sdAvailable = false;
+    if (_logFile) _logFile.close();
+    // We don't disable global logging, just the SD target
+    _sdAvailable = false; 
+    _sdEnabled = false;
   }
 }
 
 /**
- * @brief Skeleton for SPI Flash logging (To be implemented with scaling logic).
- * @param data A RawFlightData struct containing the flight data to be logged.
+ * @brief Logic for writing binary data to Internal Flash (FFat).
  */
-void DataManager::logDataFlash(const RawFlightData &data) {
-  // Implement scale and write logic here
+void DataManager::writeToInternal(const RawFlightData& data) {
+    ScaledFlightData record;
+    record.timestamp_ms = data.timestamp;
+    
+    record.accX_scaled = (int16_t)(data.accX * 1000.0f);
+    record.accY_scaled = (int16_t)(data.accY * 1000.0f);
+    record.accZ_scaled = (int16_t)(data.accZ * 1000.0f);
+    
+    record.gyroX_scaled = (int16_t)(data.gyroX * 100.0f);
+    record.gyroY_scaled = (int16_t)(data.gyroY * 100.0f);
+    record.gyroZ_scaled = (int16_t)(data.gyroZ * 100.0f);
+    
+    record.magX_scaled = (int16_t)(data.magX * 10.0f);
+    record.magY_scaled = (int16_t)(data.magY * 10.0f);
+    record.magZ_scaled = (int16_t)(data.magZ * 10.0f);
+    
+    record.qW_scaled = (int16_t)(data.qW * 10000.0f);
+    record.qX_scaled = (int16_t)(data.qX * 10000.0f);
+    record.qY_scaled = (int16_t)(data.qY * 10000.0f);
+    record.qZ_scaled = (int16_t)(data.qZ * 10000.0f);
+    
+    record.altitude_scaled = (int16_t)(data.filteredAltitude * 10.0f);
+    record.velocity_scaled = (int16_t)(data.filteredVerticalVelocity * 100.0f);
+    record.accel_net_scaled = (int16_t)(data.netVerticalAcceleration * 100.0f);
+    record.tilt_scaled = (int16_t)(data.tilt * 100.0f);
+    
+    record.pressure_scaled = (uint32_t)data.barometricPressure;
+    record.airbrake_scaled = (uint8_t)data.airbrakeDeployment;
+    record.gain1_scaled = (int16_t)(data.pid_gain * 100.0f);
+    record.gain2_scaled = (int16_t)(data.cd_gain * 100.0f);
+    record.flightState = data.flightState;
+
+    // Binary logging to FFat RAM Buffer
+    _ffatBuffer[_ffatBufferCount] = record;
+    _ffatBufferCount++;
+
+    // Write buffer to Flash in one big chunk
+    if (_ffatBufferCount >= LOG_BUFFER_SIZE_INT) {
+        if (!_internalLogFile) {
+            _internalLogFile = FFat.open(_currentInternalFileName, FILE_APPEND);
+        }
+
+        if (_internalLogFile) {
+            _internalLogFile.write((const uint8_t*)_ffatBuffer, _ffatBufferCount * sizeof(ScaledFlightData));
+            _ffatBufferCount = 0;
+            _ffatRecordCounter += LOG_BUFFER_SIZE_INT;
+        }
+    }
+
+    // Periodic sync for FFat (Safety)
+    if (_ffatRecordCounter >= LOG_SYNC_INTERVAL_INT) {
+        if (_internalLogFile) {
+            _internalLogFile.close(); // Forces sync to Flash
+            // _internalLogFile will be reopened on next buffer flush
+        }
+        _ffatRecordCounter = 0;
+    }
+}
+
+/**
+ * @brief Logic for writing data to External SPI Flash.
+ * @note Implementation pending hardware-specific SPIFlash library calls.
+ */
+void DataManager::writeToExternal(const RawFlightData& data) {
+    if (!_flashAvailable) return;
+    // TODO: Implement binary serialization for external flash
+}
+
+/**
+ * @brief Lists all files in the internal flash memory.
+ */
+void DataManager::listInternalFiles() {
+  if (!_ffatAvailable) {
+    DEBUG_PRINTLN_F("FFAT: Internal flash not available.");
+    return;
+  }
+  DEBUG_PRINTLN_F("\n--- Internal Flash Files ---");
+  File root = FFat.open("/");
+  File file = root.openNextFile();
+  while (file) {
+    DEBUG_PRINT_F("File: ");
+    DEBUG_PRINT(file.name());
+    DEBUG_PRINT_F("  Size: ");
+    DEBUG_PRINTLN(file.size());
+    file = root.openNextFile();
+    
+    // Safety
+    esp_task_wdt_reset();
+    vTaskDelay(1);
+  }
+  DEBUG_PRINT_F("FFAT Free: ");
+  DEBUG_PRINTLN(FFat.freeBytes() / 1024);
+}
+
+void DataManager::dumpInternalFlash(int fileIndex) {
+  if (!_ffatAvailable) return;
+  
+  if (fileIndex == -1) {
+    fileIndex = getLatestInternalLogIndex();
+    if (fileIndex < 0) {
+      DEBUG_PRINTLN_F("FFAT: No logs found to dump.");
+      return;
+    }
+  }
+
+  char buf[32];
+  snprintf(buf, sizeof(buf), "/log_%03d.bin", fileIndex);
+  
+  File f = FFat.open(buf, FILE_READ);
+  if (!f) {
+    DEBUG_PRINTLN_F("FFAT: File not found.");
+    return;
+  }
+
+  DEBUG_PRINT_F("--- DECODING INTERNAL LOG: ");
+  DEBUG_PRINTLN(buf);
+  
+  // Print CSV Header for the decoded data
+  DEBUG_PRINTLN_F("timestamp_ms,accX,accY,accZ,gyroX,gyroY,gyroZ,magX,magY,magZ,qW,qX,qY,qZ,alt,vel,acc_net,tilt,pres,brake,state");
+
+  ScaledFlightData record;
+  uint32_t recordCount = 0;
+  while (f.read((uint8_t*)&record, sizeof(record)) == sizeof(record)) {
+    Serial.printf("%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%.4f,%.4f,%.4f,%.1f,%.2f,%.2f,%.2f,%u,%u,%d\n",
+        record.timestamp_ms,
+        record.accX_scaled / 1000.0f, record.accY_scaled / 1000.0f, record.accZ_scaled / 1000.0f,
+        record.gyroX_scaled / 100.0f, record.gyroY_scaled / 100.0f, record.gyroZ_scaled / 100.0f,
+        record.magX_scaled / 10.0f, record.magY_scaled / 10.0f, record.magZ_scaled / 10.0f,
+        record.qW_scaled / 10000.0f, record.qX_scaled / 10000.0f, record.qY_scaled / 10000.0f, record.qZ_scaled / 10000.0f,
+        record.altitude_scaled / 10.0f,
+        record.velocity_scaled / 100.0f,
+        record.accel_net_scaled / 100.0f,
+        record.tilt_scaled / 100.0f,
+        record.pressure_scaled,
+        (uint16_t)record.airbrake_scaled, // Print as number
+        record.flightState
+    );
+
+    // Feed the watchdog to prevent reset during large files
+    if (++recordCount % 20 == 0) {
+        esp_task_wdt_reset();
+        vTaskDelay(1); // Yield to other tasks
+    }
+  }
+  DEBUG_PRINTLN_F("--- END OF LOG ---");
+  f.close();
+}
+
+void DataManager::clearInternalFlash() {
+    DEBUG_PRINTLN_F("FFAT: Formatting internal flash...");
+    if (FFat.format()) {
+        DEBUG_PRINTLN_F("FFAT: Format complete.");
+    } else {
+        DEBUG_PRINTLN_F("FFAT: Format FAILED.");
+    }
 }
 
 // --- HIL Simulation ---
@@ -566,14 +859,17 @@ bool DataManager::ensureSDConnection() {
     }
 
     // --- Multi-stage Initialization Strategy ---
+    delay(500); // Give the card time to internally reset after power-on
+    DEBUG_PRINTLN_F("SD: Starting mount sequence...");
 
     // // 1. Attempt 4-bit at 20MHz (Standard Performance)
     // DEBUG_PRINTLN_F("SD: Attempting 4-bit, 8MHz...");
     // if (SD_MMC.begin("/sdcard", false, false, 8000)) {
     //   DEBUG_PRINTLN_F("SD: Mounted successfully (4-bit, 8MHz).");
-    //   sdmmcInitialized = true;
-    //   return true;
     // }
+
+    // }
+
 
     // 2. Fallback to 1-bit at 20MHz (Less pins, more stable)
     DEBUG_PRINTLN_F("SD: Attempting 1-bit, 20MHz...");
@@ -596,6 +892,7 @@ bool DataManager::ensureSDConnection() {
   }
   return true;
 }
+
 
 /**
  * @brief Generates the next available filename for logging on the SD card.
@@ -622,7 +919,7 @@ String DataManager::generateFileName() {
  * and outputs its contents to the Serial console. It is useful for retrieving
  * log data without removing the SD card.
  **/
-void DataManager::dumpCurrentLog() {
+void DataManager::dumpSDCurrentLog() {
   if (_currentSDFileName == "") {
     DEBUG_PRINTLN_F("No file name registered to read.");
     return;
@@ -664,7 +961,7 @@ void DataManager::dumpCurrentLog() {
  * specified log directory. It prints the filenames and their sizes in KB to the
  * Serial console.
  **/
-void DataManager::listFiles() {
+void DataManager::listSDFiles() {
   if (!ensureSDConnection()) {
     DEBUG_PRINTLN_F("Error: SD card not accessible.");
     return;
@@ -688,6 +985,8 @@ void DataManager::listFiles() {
       DEBUG_PRINTLN_F(" KB");
     }
     file = root.openNextFile();
+    esp_task_wdt_reset();
+    vTaskDelay(1);
   }
   DEBUG_PRINTLN_F("--------------------------------");
 }
@@ -699,7 +998,7 @@ void DataManager::listFiles() {
  * specified log directory. It prompts the user for confirmation before
  * proceeding with the deletion.
  **/
-void DataManager::clearAllLogs() {
+void DataManager::clearSDAllLogs() {
   if (!ensureSDConnection()) {
     DEBUG_PRINTLN_F("SD: Error connecting.");
     return;
@@ -738,6 +1037,8 @@ void DataManager::clearAllLogs() {
     }
 
     file = root.openNextFile();
+    esp_task_wdt_reset();
+    vTaskDelay(1);
   }
   root.close();
 
@@ -792,6 +1093,8 @@ void DataManager::receiveHILFile(const char *HILFileName) {
           Serial.println("\nError: Buffer full!");
         recebendo = false;
       }
+      // Feed watchdog during large serial uploads
+      esp_task_wdt_reset();
     }
 
     // Check for END
@@ -1063,6 +1366,15 @@ void DataManager::runStrategyBenchmark(uint32_t freq,u_int16_t numberOfRecords) 
   runScenario("1 close", 0, 1);
   DEBUG_PRINTLN_F(
       "------------------------------------------------------------------");
+}
+
+/**
+ * @brief Returns the index of the latest existing internal log.
+ * @return Latest index, or -1 if no logs exist.
+ */
+int DataManager::getLatestInternalLogIndex() const {
+  if (!_ffatAvailable || _ffatRecordCounter == 0) return -1;
+  return (int)_ffatRecordCounter - 1;
 }
 
 // Benchmark the SD card

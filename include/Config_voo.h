@@ -31,12 +31,21 @@ constexpr uint8_t PIN_SDIO_D2             = 8;
 constexpr uint8_t PIN_SDIO_D3             = 46; 
 constexpr uint8_t PIN_SDIO_DET            = 11; 
 
+// //! Conflict with internal PSRAM
+// constexpr uint8_t PIN_FLASH_CS            = 36; //! Conflict with PSRAM
+// constexpr uint8_t PIN_FLASH_MOSI          = 35; //! Conflict with PSRAM
+// constexpr uint8_t PIN_FLASH_MISO          = 37; //! Conflict with PSRAM
+// constexpr uint8_t PIN_FLASH_SCK           = 17;
+// constexpr uint8_t PIN_FLASH_WP            = 38;
+// constexpr uint8_t PIN_FLASH_HOLD          = 16;
+
 constexpr uint8_t PIN_FLASH_CS            = 255; 
-constexpr uint8_t PIN_FLASH_MOSI          = 255;
-constexpr uint8_t PIN_FLASH_MISO          = 255;
+constexpr uint8_t PIN_FLASH_MOSI          = 255; 
+constexpr uint8_t PIN_FLASH_MISO          = 255; 
 constexpr uint8_t PIN_FLASH_SCK           = 255;
 constexpr uint8_t PIN_FLASH_WP            = 255;
 constexpr uint8_t PIN_FLASH_HOLD          = 255;
+
 
 constexpr uint8_t I2C_ADDRESS_IMU         = 0x68;      // MPU9250 I2C address
 constexpr uint8_t I2C_ADDRESS_BARO        = 0x76;      // BMP280 I2C address
@@ -71,12 +80,21 @@ constexpr bool PERFORM_FINE_TUNING        = false;     // Run iterative bias twe
 constexpr bool ERASE_CALIB_ON_STARTUP     = false;     // Force delete all saved IMU data
 
 // --- SD Card & Logging ---
-constexpr bool ENABLE_DATA_LOGGING        = true;      // SD Card logging master switch
+constexpr bool ENABLE_DATA_LOGGING        = true;      // Master switch for all logging
+constexpr bool ENABLE_SD_LOGGING          = true;      // Toggle SD (CSV)
+constexpr bool ENABLE_INTERNAL_LOGGING    = true;      // Toggle Internal Flash (Binary)
+constexpr bool ENABLE_EXTERNAL_LOGGING    = false;     // Toggle External Flash (Reserved)
+constexpr bool ENABLE_TELEMETRY           = true;      // Enable real-time monitor prints
+constexpr uint8_t TELEMETRY_LOGGING_DECIMATION = 5;    // Cycles between telemetry prints (10Hz) to save APB bandwidth
+
 constexpr char     SD_LOG_FOLDER[]        = "/REG_VOO"; 
 constexpr char     SD_LOG_BASENAME[]      = "VOO_";
 constexpr uint16_t SD_MAX_LOG_FILES       = 1000; 
-constexpr uint32_t SD_WRITE_TIMEOUT_MS    = 80;        // Max time allowed for single write [ms]
-constexpr uint8_t LOG_SYNC_INTERVAL       = 1;         // Data sync: 1: Safe | 10: Balanced | 50: Fast
+constexpr uint32_t SD_WRITE_TIMEOUT_MS    = 80;         // Max time allowed for single write [ms]
+constexpr uint8_t LOG_BUFFER_SIZE_SD      = 10;         // Records to buffer in RAM before SD write
+constexpr uint8_t LOG_BUFFER_SIZE_INT     = 50;         // Binary records to buffer before Internal Flash write
+constexpr uint16_t LOG_SYNC_INTERVAL_SD   = 1;          // Sync every buffer flush
+constexpr uint16_t LOG_SYNC_INTERVAL_INT  = 500;        // Sync Internal Flash every 500 records (10s @ 50Hz)
 
 // --- HIL (Hardware-In-the-Loop) ---
 constexpr bool HIL_MODE_ACTIVE            = false;      // Enable serial-in sensor simulation
@@ -143,7 +161,6 @@ constexpr float   HEALTH_ACCEL_MAG_TOLERANCE  = 0.15f; // Stationary 1g test tol
 constexpr float   HEALTH_GYRO_TOLERANCE_DPS   = 1.0f;  // Stationary drift tolerance [dps]
 constexpr float   HEALTH_ALT_TOLERANCE_M      = 4.0f;  // Baro variance tolerance at pad [m]
 constexpr float   HEALTH_VEL_TOLERANCE_MS     = 1.0f;  // Kalman velocity variance at pad [m/s]
-constexpr uint8_t TELEMETRY_PRINT_INTERVAL    = 2;     // Cycles between telemetry Serial prints
 
 // =========================================================================
 // SENSOR & ALGORITHM THRESHOLDS
@@ -189,13 +206,13 @@ constexpr int   CALIBRATION_MAX_ITERATIONS           = 30;      // Safety limit 
 
 // --- Teleplot Macros ---
 #if USE_TELEPLOT >= 1
-    #define PRINT_STATE(stateName) DEBUG_PRINTLN_F(">STATE:" stateName)
+    #define PRINT_STATE(stateName) do { if (_telemetryEnabled) { Serial.print(F(">STATE:")); Serial.println(stateName); } } while (0)
     #define PLOT_VAR(name, val) \
-        do { if (SERIAL_CHECK) { Serial.print(F(">")); Serial.print(name); Serial.print(F(":")); Serial.println(val); } } while (0)
+        do { if (SERIAL_CHECK && _telemetryEnabled) { Serial.print(F(">")); Serial.print(name); Serial.print(F(":")); Serial.println(val); } } while (0)
 #else
-    #define PRINT_STATE(stateName) DEBUG_PRINT_F("STATE: " stateName " | ")
+    #define PRINT_STATE(stateName) do { if (_telemetryEnabled) { Serial.print(F("STATE: ")); Serial.print(stateName); Serial.print(F(" | ")); } } while (0)
     #define PLOT_VAR(name, val) \
-        do { if (SERIAL_CHECK) { Serial.print(name); Serial.print(F(": ")); Serial.print(val); Serial.print(F(" | ")); } } while (0)
+        do { if (SERIAL_CHECK && _telemetryEnabled) { Serial.print(name); Serial.print(F(": ")); Serial.print(val); Serial.print(F(" | ")); } } while (0)
 #endif
 
 #endif // CONFIG_VOO_H

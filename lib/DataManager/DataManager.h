@@ -12,27 +12,30 @@
 #include <FS.h>
 #include <SD_MMC.h>
 #include <SPI.h>
+#include <FFat.h>
 #include <SPIMemory.h>
 #include "Config_voo.h"
 
 // --- Data Structures ---
 
-struct ScaledFlightData {
-    unsigned long timestamp_ms;
-    int16_t accX_scaled, accY_scaled, accZ_scaled;
-    int16_t gyroX_scaled, gyroY_scaled, gyroZ_scaled;
-    int16_t magX_scaled, magY_scaled, magZ_scaled;
-    int16_t qW_scaled, qX_scaled, qY_scaled, qZ_scaled;
-    int16_t filteredAltitude_scaled;
-    int16_t filteredVerticalVelocity_scaled;
-    int16_t netVerticalAcceleration_scaled;
-    int16_t tilt_scaled; 
-    float barometricPressure_scaled;
-    int16_t airbrakeDeployment_scaled;
-    int16_t gain1_scaled;
-    int16_t gain2_scaled;
-    uint8_t flightState;
-}; 
+// (BinaryFlightRecord removed in favor of ScaledFlightData)
+
+struct __attribute__((packed)) ScaledFlightData {
+    uint32_t timestamp_ms;          // 4 bytes
+    int16_t accX_scaled, accY_scaled, accZ_scaled; // 6 bytes
+    int16_t gyroX_scaled, gyroY_scaled, gyroZ_scaled; // 6 bytes
+    int16_t magX_scaled, magY_scaled, magZ_scaled; // 6 bytes
+    int16_t qW_scaled, qX_scaled, qY_scaled, qZ_scaled; // 8 bytes
+    int16_t altitude_scaled;       // 2 bytes (dm)
+    int16_t velocity_scaled;       // 2 bytes (cm/s)
+    int16_t accel_net_scaled;      // 2 bytes (cm/s2)
+    int16_t tilt_scaled;           // 2 bytes (centi-deg)
+    uint32_t pressure_scaled;      // 4 bytes (Pa)
+    uint8_t airbrake_scaled;       // 1 byte (0-100%)
+    int16_t gain1_scaled;          // 2 bytes
+    int16_t gain2_scaled;          // 2 bytes
+    uint8_t flightState;           // 1 byte
+};
 
 struct RawFlightData {
     u_int32_t timestamp;
@@ -82,20 +85,31 @@ public:
     // --- Initialization ---
 
     bool setupSD();
+    bool setupInternalFlash(bool formatIfFailed = true);
     bool setupFlash(bool erase = false);
     
-    // --- Logging control ---
+    void forceSync();
 
+    // --- Logging control ---
+    
     void startLogging();
     void stopLogging();
     bool isLoggingActive() const { return _loggingActive; }
     void setDecimationFactor(uint16_t factor);
     void closeSDCard(); 
     
+    // Target Toggles
+    void setSDLogging(bool enabled) { _sdEnabled = enabled; }
+    void setInternalLogging(bool enabled) { _internalEnabled = enabled; }
+    void setExternalLogging(bool enabled) { _externalEnabled = enabled; }
+    
+    bool isSDEnabled() const { return _sdEnabled; }
+    bool isInternalEnabled() const { return _internalEnabled; }
+    bool isExternalEnabled() const { return _externalEnabled; }
+    
     // --- Core logging logic ---
 
-    void logDataSD(const RawFlightData& data);
-    void logDataFlash(const RawFlightData& data);
+    void logFlightData(const RawFlightData& data);
     
     // --- HIL Simulation ---
 
@@ -106,9 +120,13 @@ public:
 
     // --- Auxilary tools ---
 
-    void listFiles();
-    void dumpCurrentLog();
-    void clearAllLogs();
+    void listSDFiles();
+    void listInternalFiles();
+    void dumpSDCurrentLog();
+    void dumpInternalFlash(int fileIndex = -1); // Default to latest
+    int getLatestInternalLogIndex() const;
+    void clearSDAllLogs();
+    void clearInternalFlash();
     void receiveHILFile(const char* HILFileName);
     void runFrequencyTest(uint32_t freq, u_int16_t flushLimit, u_int16_t numberOfRecords, bool onlyPrintf = true, bool oneBitMode = false);
     void runStrategyBenchmark(uint32_t freq, u_int16_t numberOfRecords);
@@ -132,6 +150,9 @@ private:
         _decimationFactor = 1;
         _decimationCounter = 0;
         _sdAvailable = false;
+        _sdEnabled = true;       
+        _internalEnabled = true; 
+        _externalEnabled = false; 
         _sdRecordCounter = 0;
         _sdLEDCounter = 0;
         // ... (Flash/Helpers init is in constructor)
@@ -155,8 +176,11 @@ private:
     File _hilFile;
     String _currentSDFileName;
     bool _sdAvailable;
+    bool _sdEnabled; 
     uint8_t _sdRecordCounter;
     uint8_t _sdLEDCounter;
+    String  _sdBuffer;      // Memory buffer for CSV rows
+    uint8_t _sdBufferCount; // Current number of records in buffer
     const uint32_t PRE_ALLOC_SIZE = 20 * 1024 * 1024; // TODO: implement pre-allocation of 20 Mb files 
     const uint32_t _sdWriteTimeoutMs = SD_WRITE_TIMEOUT_MS;
 
@@ -169,11 +193,21 @@ private:
     const u_int8_t _pinSDIO_D3  = PIN_SDIO_D3; 
     const u_int8_t _pinSDIO_DET = PIN_SDIO_DET; 
     
+    // Internal Flash (FFat)
+    File _internalLogFile;
+    String _currentInternalFileName;
+    bool _ffatAvailable;
+    bool _internalEnabled; 
+    uint32_t _ffatRecordCounter; // Records since last file close
+    ScaledFlightData _ffatBuffer[LOG_BUFFER_SIZE_INT]; // RAM buffer for binary records
+    uint8_t  _ffatBufferCount;   // Current records in RAM buffer
+    
     // Flash SPI
     const u_int8_t _pinCS_Flash = PIN_FLASH_CS;
     SPIFlash *_flash;
     uint32_t _flashAddr;
     bool _flashAvailable;
+    bool _externalEnabled; 
 
     // Stabilization variables
     bool _hilStabilizing;             // Flag to indicate stabilization state
@@ -182,6 +216,9 @@ private:
     HILSimulationData _staticHILFrame; // Data from the first line
    
     // Helpers
+    void writeToSD(const RawFlightData& data);
+    void writeToInternal(const RawFlightData& data);
+    void writeToExternal(const RawFlightData& data);
     bool ensureSDConnection();
     String generateFileName();
     HILMode detectHILFormat(String headerLine);

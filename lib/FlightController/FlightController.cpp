@@ -224,6 +224,12 @@ void FlightController::update() {
   // Save on state change
   if (_flightState != lastState) {
     saveStateToRTC();
+
+    // Selective Force Sync for critical data persistence (Apogee/Landing)
+    if (_flightState == FlightState::DESCENT || _flightState == FlightState::LANDING) {
+      DataManager::getInstance().forceSync();
+    }
+
     lastState = _flightState;
   }
   // Save periodically (every 100ms)
@@ -301,7 +307,6 @@ void FlightController::healthCheckLoop() {
 
     if (_healthCheckCount >=_reqHealthChecks) { 
       DEBUG_PRINTLN_F("HEALTH CHECK: Consecutive checks OK. Transitioning...");
-      signalSuccessfullModule("Health Check Complete");
 
       _flightState = FlightState::WAIT_LAUNCH;
       DataManager::getInstance().startLogging(); // Activate data logging
@@ -326,22 +331,7 @@ void FlightController::healthCheckLoop() {
  * @brief Loop for WAIT_LAUNCH state. Monitors for launch acceleration.
  */
 void FlightController::waitLaunchLoop() {
-  _loopPrintCounter++;
-
   baro->recalibrateGroundPressure(_barometricPressure);
-
-  if (_loopPrintCounter > _printCountLimit) {
-    PRINT_STATE("WAIT_LAUNCH");
-    PLOT_VAR("Alt", _filteredAltitude);
-    PLOT_VAR("VelZ", _filteredVerticalVelocity);
-    PLOT_VAR("AccelZ", _netVerticalAcceleration);
-    PLOT_VAR("Tilt", _tilt);
-#if USE_TELEPLOT == 0
-    DEBUG_PRINTLN(); // Add a newline at the end only if we are printing on one line
-#endif
-    printFullTelemetry();
-    _loopPrintCounter = 0;
-  }
 
   if (detectLaunch(_netVerticalAcceleration, _filteredAltitude)) {
     DEBUG_PRINTLN_F("LAUNCH DETECTED!");
@@ -362,19 +352,6 @@ void FlightController::waitLaunchLoop() {
  * @brief Loop for MOTOR_ON state. Monitors ascent and checks for burnout.
  */
 void FlightController::motorOnLoop() {
-  _loopPrintCounter++;
-  if (_loopPrintCounter > _printCountLimit) {
-    PRINT_STATE("MOTOR_ON");
-    PLOT_VAR("Alt", _filteredAltitude);
-    PLOT_VAR("VelZ", _filteredVerticalVelocity);
-    PLOT_VAR("Tilt", _tilt);
-#if USE_TELEPLOT == 0
-    DEBUG_PRINTLN(); // Add a newline at the end only if we are printing on one line
-#endif
-    printFullTelemetry();
-    _loopPrintCounter = 0;
-  }
-
   unsigned long tempoDesdeLancamento = millis() - _launchDetectedTime;
   if (detectBurnout(_netVerticalAcceleration, tempoDesdeLancamento)) {
     DEBUG_PRINTLN_F("BURNOUT DETECTED!");
@@ -388,14 +365,7 @@ void FlightController::motorOnLoop() {
  * @brief Loop for BURNOUT state. Waits for conditions to deploy airbrakes.
  */
 void FlightController::burnoutLoop() {
-  PRINT_STATE("Burnout");
-  PLOT_VAR("Alt", _filteredAltitude);
-  PLOT_VAR("VelZ", _filteredVerticalVelocity);
-#if USE_TELEPLOT == 0
-  DEBUG_PRINTLN(); // Add a newline at the end only if we are printing on one line
-#endif
-  printFullTelemetry();
-
+  // Check for airbrakes actuation window
   if (detectAirbrakesActuation(_filteredAltitude, _filteredVerticalVelocity)) {
     DEBUG_PRINTLN_F("Appropriate speed detected, initiating airbrake actuation.");
     _flightState = FlightState::AIRBRAKE_DEPLOYMENT;
@@ -407,20 +377,6 @@ void FlightController::burnoutLoop() {
  * @brief Loop for AIRBRAKE_DEPLOYMENT state. Controls airbrakes and monitors for apogee.
  */
 void FlightController::airbrakeDeploymentLoop() {
-  _loopPrintCounter++;
-  if (_loopPrintCounter > _printCountLimit) {
-    PRINT_STATE("AIRBRAKE_DEPLOYMENT");
-    PLOT_VAR("Alt", _filteredAltitude);
-    PLOT_VAR("VelZ", _filteredVerticalVelocity);
-    PLOT_VAR("Tilt", _tilt);
-    PLOT_VAR("Deflection", _airbrakeDeployment * 100.0f);
-#if USE_TELEPLOT == 0
-    DEBUG_PRINTLN(); // Add a newline at the end only if we are printing on one line
-#endif
-    printFullTelemetry();
-    _loopPrintCounter = 0;
-  }
-
   // Airbrake control logic
   _delta_V_ms = lookUpSpeed(_filteredAltitude) - _filteredVerticalVelocity;
 
@@ -450,13 +406,6 @@ void FlightController::airbrakeDeploymentLoop() {
  * @brief Loop for APOGEE state. Retracts airbrakes and transitions to descent.
  */
 void FlightController::apogeeLoop() {
-  PRINT_STATE("APOGEE");
-  PLOT_VAR("Max_Alt", _filteredAltitude);
-#if USE_TELEPLOT == 0
-  DEBUG_PRINTLN(); // Add a newline at the end only if we are printing on one line
-#endif
-  printFullTelemetry();
-
   retractAirbrakes();
   DEBUG_PRINTLN_F("Airbrakes retracted at apogee.");
 
@@ -469,18 +418,6 @@ void FlightController::apogeeLoop() {
  * @brief Loop for DESCENT state. Monitors for landing conditions.
  */
 void FlightController::descentLoop() {
-  _loopPrintCounter++;
-  if (_loopPrintCounter > _printCountLimit) {
-    PRINT_STATE("DESCENT");
-    PLOT_VAR("Alt", _filteredAltitude);
-    PLOT_VAR("VelZ", _filteredVerticalVelocity);
-#if USE_TELEPLOT == 0
-    DEBUG_PRINTLN(); // Add a newline at the end only if we are printing on one line
-#endif
-    printFullTelemetry();
-    _loopPrintCounter = 0;
-  }
-
   unsigned long tempoDesdeApogeu = millis() - _apogeeDetectedTime;
   if (detectLanding(_filteredVerticalVelocity, _filteredAltitude, tempoDesdeApogeu)) {
     DEBUG_PRINTLN_F("LANDING DETECTED!");
@@ -548,6 +485,7 @@ void FlightController::forceState(FlightState newState) {
  */
 bool FlightController::setupServo() {
   noTone(PIN_BUZZER); 
+  pinMode(PIN_BUZZER, OUTPUT);
   digitalWrite(PIN_BUZZER, LOW);
   delay(1500); // Massive delay to let LEDC HW settle after tones
   
@@ -987,30 +925,34 @@ bool FlightController::attemptRecovery() {
 /**
  * @brief Prints the full telemetry payload to standard serial for plotting
  */
-void FlightController::printFullTelemetry() {
-#if USE_TELEPLOT == 2
-  PLOT_VAR("AccX", _attitudeEstimator->getIMU()->getAccX());
-  PLOT_VAR("AccY", _attitudeEstimator->getIMU()->getAccY());
-  PLOT_VAR("AccZ", _attitudeEstimator->getIMU()->getAccZ());
-  PLOT_VAR("GyroX", _attitudeEstimator->getIMU()->getGyroX_rads() * RAD_TO_DEG);
-  PLOT_VAR("GyroY", _attitudeEstimator->getIMU()->getGyroY_rads() * RAD_TO_DEG);
-  PLOT_VAR("GyroZ", _attitudeEstimator->getIMU()->getGyroZ_rads() * RAD_TO_DEG);
-  PLOT_VAR("MagX", _attitudeEstimator->getIMU()->getMagX() / 10.0f);
-  PLOT_VAR("MagY", _attitudeEstimator->getIMU()->getMagY() / 10.0f);
-  PLOT_VAR("MagZ", _attitudeEstimator->getIMU()->getMagZ() / 10.0f);
-  PLOT_VAR("qW", _attitudeEstimator->getQuaternionW());
-  PLOT_VAR("qX", _attitudeEstimator->getQuaternionX());
-  PLOT_VAR("qY", _attitudeEstimator->getQuaternionY());
-  PLOT_VAR("qZ", _attitudeEstimator->getQuaternionZ());
-  PLOT_VAR("AccelZ", _netVerticalAcceleration);
-  PLOT_VAR("Max_Alt", _maxRecordedHeight);
-  PLOT_VAR("Tilt", _tilt);
+void FlightController::printFullTelemetry(const RawFlightData& data) {
+  if (!_telemetryEnabled) return;
+
+  PLOT_VAR("AccX", data.accX);
+  PLOT_VAR("AccY", data.accY);
+  PLOT_VAR("AccZ", data.accZ);
+  PLOT_VAR("GyroX", data.gyroX);
+  PLOT_VAR("GyroY", data.gyroY);
+  PLOT_VAR("GyroZ", data.gyroZ);
+  PLOT_VAR("MagX", data.magX);
+  PLOT_VAR("MagY", data.magY);
+  PLOT_VAR("MagZ", data.magZ);
+  PLOT_VAR("qW", data.qW);
+  PLOT_VAR("qX", data.qX);
+  PLOT_VAR("qY", data.qY);
+  PLOT_VAR("qZ", data.qZ);
+  PLOT_VAR("AccelZ", data.netVerticalAcceleration);
+  PLOT_VAR("Max_Alt", _maxRecordedHeight); // Still use internal max Recorded height
+  PLOT_VAR("Tilt", data.tilt);
   PLOT_VAR("TiltLimit", maxTiltAngle);
   PLOT_VAR("Max", maxTiltAngle);
-  PLOT_VAR("Press", _barometricPressure); // Pa
-  PLOT_VAR("Deflection", _airbrakeDeployment * 100.0f); // %
-  PLOT_VAR("PID_Gain", _pid_gain);
-  PLOT_VAR("Cd_Gain", _cd_gain);
-  PLOT_VAR("FlightState", (uint8_t)_flightState);
+  PLOT_VAR("Press", data.barometricPressure); // Pa
+  PLOT_VAR("Deflection", data.airbrakeDeployment); // %
+  PLOT_VAR("PID_Gain", data.pid_gain);
+  PLOT_VAR("Cd_Gain", data.cd_gain);
+  PLOT_VAR("FlightState", data.flightState);
+
+#if USE_TELEPLOT == 0
+  DEBUG_PRINTLN(); // Add newline for Standard Monitor mode
 #endif
 }
