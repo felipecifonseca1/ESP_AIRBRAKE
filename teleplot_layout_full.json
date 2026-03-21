@@ -468,9 +468,9 @@
          },
          "series": [
             {
-               "name": "Gain2",
+               "name": "PID_Gain",
                "sourceNames": [
-                  "Gain2"
+                  "PID_Gain"
                ],
                "formula": "",
                "options": {
@@ -493,9 +493,9 @@
          },
          "series": [
             {
-               "name": "Gain2",
+               "name": "Cd_Gain",
                "sourceNames": [
-                  "Gain2"
+                  "Cd_Gain"
                ],
                "formula": "",
                "options": {

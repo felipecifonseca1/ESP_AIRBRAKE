@@ -143,7 +143,7 @@ void TaskSerialComm(void *pvParameters) {
         DEBUG_PRINTLN_F("Command received: Clear All Logs (SD)");
         logger.clearSDAllLogs();
       }
-
+      // TODO: Fix current log size print while file is open
       if (cmd == 'f' || cmd == 'F') {
         DEBUG_PRINTLN_F("Command received: List Internal Flash Files");
         logger.listInternalFiles();
@@ -207,27 +207,39 @@ void TaskSerialComm(void *pvParameters) {
                 (1.0f - (float)diag.cyclesExceeded / diag.totalCycles) * 100.0f : 100.0f;
 
             DEBUG_PRINTLN_F("\n--- CORE 1: FLIGHT CONTROL ---");
-            Serial.printf("Sensors Read:     %u us\n", diag.sensorRead_us);
-            Serial.printf("IMU Filter:       %u us\n", diag.imuFilter_us);
-            Serial.printf("Nav/Calculation:  %u us\n", diag.navCalc_us);
-            Serial.printf("Kalman Update:    %u us\n", diag.kalmanUpdate_us);
-            Serial.printf("Queue Send:       %u us\n", diag.queueSend_us);
-            Serial.printf("Total Execution:  %u us\n", diag.totalExecute_us);
-            Serial.printf("Peak Execution:   %u us\n", diag.peakExecution_us);
-            Serial.printf("Total Cycles:     %u\n", (uint32_t)diag.totalCycles);
-            Serial.printf("Cycles Exceeded:  %u\n", (uint32_t)diag.cyclesExceeded);
-            Serial.printf("Success Rate:     %.2f %%\n", successRate);
+            DEBUG_PRINTF("Sensors Read:     %u us\n", diag.sensorRead_us);
+            DEBUG_PRINTF("IMU Filter:       %u us\n", diag.imuFilter_us);
+            DEBUG_PRINTF("Nav/Calculation:  %u us\n", diag.navCalc_us);
+            DEBUG_PRINTF("Kalman Update:    %u us\n", diag.kalmanUpdate_us);
+            DEBUG_PRINTF("Queue Send:       %u us\n", diag.queueSend_us);
+            DEBUG_PRINTF("Total Execution:  %u us\n", diag.totalExecute_us);
+            DEBUG_PRINTF("Peak Execution:   %u us\n", diag.peakExecution_us);
+            DEBUG_PRINTF("Total Cycles:     %u\n", (uint32_t)diag.totalCycles);
+            DEBUG_PRINTF("Cycles Exceeded:  %u\n", (uint32_t)diag.cyclesExceeded);
+            DEBUG_PRINTF("Success Rate:     %.2f %%\n", successRate);
 
             DEBUG_PRINTLN_F("\n--- CORE 0: I/O & LOGGING ---");
-            Serial.printf("SD (Avg Write):   %u us\n", ioDiag.sdWriteAvg_us);
-            Serial.printf("SD (Peak Hist):   %u us\n", ioDiag.maxSdWrite_us);
-            Serial.printf("Flash (Avg):      %u us\n", ioDiag.internalFlashWriteAvg_us);
-            Serial.printf("Flash (Peak):     %u us\n", ioDiag.maxInternalFlashWrite_us);
-            Serial.printf("Flash Buffer:    %u / %d\n", ioDiag.ffatBufferCount, LOG_BUFFER_SIZE_INT);
-            Serial.printf("Telemetry (Avg):  %u us\n", ioDiag.telemetryPrint_us);
-            Serial.printf("Total Task Cycle: %u us\n", ioDiag.totalTaskCycle_us);
+            DEBUG_PRINTF("SD (Avg Write):   %u us\n", ioDiag.sdWriteAvg_us);
+            DEBUG_PRINTF("SD (Peak Hist):   %u us\n", ioDiag.maxSdWrite_us);
+            DEBUG_PRINTF("Flash (Avg):      %u us\n", ioDiag.internalFlashWriteAvg_us);
+            DEBUG_PRINTF("Flash (Peak):     %u us\n", ioDiag.maxInternalFlashWrite_us);
+            
+            // Phase-aware buffer reporting
+            uint8_t state = diag.flightState; 
+            if (state <= 2) { // PAD phase
+                DEBUG_PRINTF("Flash Buffer:    %u / %u (Pad)\n", ioDiag.ffatBufferCount, LOG_PAD_FLUSH_SIZE);
+            } else if (state <= 6) { // ASCENT phase
+                DEBUG_PRINTF("Flash Buffer:    %u / %u (Buffered)\n", ioDiag.ffatBufferCount, LOG_BUFFER_SIZE_INT);
+            } else { // DESCENT (7-8)
+                DEBUG_PRINTF("Flash Flushing:  %u remaining\n", ioDiag.ffatBufferCount);
+            }
+
+            DEBUG_PRINTF("Telemetry (Avg):  %u us\n", ioDiag.telemetryPrint_us);
+            DEBUG_PRINTF("Total Task Cycle: %u us\n", ioDiag.totalTaskCycle_us);
             
             xSemaphoreGive(serialMutex);
+        } else {
+            DEBUG_PRINTLN_F("WARNING: Serial Mutex Busy. Metrics skipped.");
         }
       }
     }
@@ -240,8 +252,6 @@ void setup() {
   Serial.begin(115200);
   delay(500); // Give serial monitor time to connect
   
-  // Detach JTAG and initialize core hardware
-  // Non-blocking Serial is set in SystemUtils::initCoreHardware
   SystemUtils::initCoreHardware(EEPROM_SIZE);
 
   // ! Do more recovery tests

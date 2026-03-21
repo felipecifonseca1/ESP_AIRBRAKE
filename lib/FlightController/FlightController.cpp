@@ -96,6 +96,7 @@ void FlightController::setupKalman() {
  */
 bool FlightController::runStateEstimator() {
   uint32_t start_us = micros();
+  _diagnostics.flightState = (uint8_t)_flightState;
   uint32_t step_us;
   bool motor_on = (_flightState == FlightState::MOTOR_ON);
   
@@ -104,16 +105,20 @@ bool FlightController::runStateEstimator() {
 
   if (HIL_MODE_ACTIVE) {
     // --- HIL Mode: Read data from CSV file ---
+    step_us = micros();
     hilData = DataManager::getInstance().readHILStep();
+    _diagnostics.sensorRead_us = micros() - step_us;
 
     if (!hilData.valid) {
       if (DataManager::getInstance().isLoggingActive()) {
         DataManager::getInstance().stopLogging();
         DEBUG_PRINTLN_F("End of HIL simulation. Logging stopped.");
       }
+      _telemetryEnabled = false;
       return false; // Simulation finished
     }
 
+    step_us = micros();
     _barometricPressure = hilData.barometricPressure_Pa;
 
     if (hilData.hasFullIMU) {
@@ -129,19 +134,36 @@ bool FlightController::runStateEstimator() {
       float magY_mG = hilData.magY_T * 1e7;
       float magZ_mG = hilData.magZ_T * 1e7;
 
-      // HIL bypasses the HAL hardware poll, we use the abstract injectData method
-      // to feed raw values into the IMU abstraction layer.
+      // [DEBUG] Add a flag to skip Mag during HIL if drifting
+      bool skipHILMag = false; 
+      if (skipHILMag) { magX_mG = 0; magY_mG = 0; magZ_mG = 0; }
+
       _attitudeEstimator->getIMU()->injectData(accX_g, accY_g, accZ_g, gyroX_degs, gyroY_degs, gyroZ_degs, magX_mG, magY_mG, magZ_mG);
       
-      _attitudeEstimator->update(Ts);
+      // Use motor_on status to mask accel jumps in HIL
+      _attitudeEstimator->update(Ts, motor_on); 
+      
       _netVerticalAcceleration = _attitudeEstimator->getNetVerticalAcceleration();
       _tilt = readCurrentTilt();
+
+      // [DEBUG] Log anomalies in HIL
+      if (abs(_tilt) > 90.0f && _flightState <= FlightState::WAIT_LAUNCH) {
+          static uint32_t lastTiltWarn = 0;
+          if (millis() - lastTiltWarn > 2000) {
+              DEBUG_PRINTF("HIL_WARN: Unusual Tilt detected: %.2f | AccZ: %.2f | q:[%.2f, %.2f, %.2f, %.2f]\n", 
+                  _tilt, accZ_g, _attitudeEstimator->getQuaternionW(), _attitudeEstimator->getQuaternionX(), 
+                  _attitudeEstimator->getQuaternionY(), _attitudeEstimator->getQuaternionZ());
+              lastTiltWarn = millis();
+          }
+      }
     } else {
-      // Simple HIL mode
       _netVerticalAcceleration = hilData.netVerticalAcceleration_ms2;
-      _tilt = 90 - hilData.tilt; // Convert tilt to match system definition
+      _tilt = 90 - hilData.tilt; 
     }
+    _diagnostics.imuFilter_us = micros() - step_us;
+    _diagnostics.navCalc_us = 0; // Grouped above
     
+    step_us = micros(); // Reset for Kalman section
   } else {
     // --- Real Mode: Read data from sensors ---
     step_us = micros();
@@ -150,7 +172,7 @@ bool FlightController::runStateEstimator() {
     _diagnostics.sensorRead_us = micros() - step_us;
 
     step_us = micros();
-    _attitudeEstimator->update(Ts);
+    _attitudeEstimator->update(Ts, motor_on);
     _diagnostics.imuFilter_us = micros() - step_us;
 
     step_us = micros();
@@ -339,7 +361,7 @@ void FlightController::healthCheckLoop() {
 
       // System settings for wait-for-launch
       _attitudeEstimator->setDriftLearning(true); // Enable drift learning on the IMU
-      _attitudeEstimator->setFilterBeta(30.0f); // Increase filter beta for faster response during wait
+      _attitudeEstimator->setFilterBeta(5.0f); // Increase filter beta for faster response during wait
       DEBUG_PRINTLN_F("FlightLogic: Ready for Launch -> WAIT_LAUNCH.");
       _R_kf(1, 1) = 0.000001f; // Reduce velocity measurement variance for ZUKF
       DataManager::getInstance().setDecimationFactor(10);
@@ -499,7 +521,7 @@ void FlightController::forceState(FlightState newState) {
         DataManager::getInstance().startLogging(); 
         DataManager::getInstance().setDecimationFactor(10);
         _attitudeEstimator->setDriftLearning(true); 
-        _attitudeEstimator->setFilterBeta(30.0f);
+        _attitudeEstimator->setFilterBeta(5.0f);
         _R_kf(1, 1) = 0.000001f; 
         _healthCheckCount = 0;
     }
@@ -967,6 +989,8 @@ void FlightController::printFullTelemetry(const RawFlightData& data) {
   PLOT_VAR("qX", data.qX);
   PLOT_VAR("qY", data.qY);
   PLOT_VAR("qZ", data.qZ);
+  PLOT_VAR("Alt", data.filteredAltitude);
+  PLOT_VAR("VelZ", data.filteredVerticalVelocity);
   PLOT_VAR("AccelZ", data.netVerticalAcceleration);
   PLOT_VAR("Max_Alt", _maxRecordedHeight); // Still use internal max Recorded height
   PLOT_VAR("Tilt", data.tilt);

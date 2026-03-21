@@ -99,9 +99,9 @@ constexpr uint16_t LOG_SYNC_INTERVAL_SD   = 1;          // Sync every buffer flu
 constexpr uint16_t LOG_SYNC_INTERVAL_INT  = 15000;      // Sync Internal Flash 
 
 // --- HIL (Hardware-In-the-Loop) ---
-constexpr bool HIL_MODE_ACTIVE            = false;      // Enable serial-in sensor simulation
+constexpr bool HIL_MODE_ACTIVE            = true;      // Enable serial-in sensor simulation
 constexpr char HIL_FILENAME[]             = "/Teste_HIL_Sensors_no_bias.csv";
-constexpr uint32_t HIL_STABILIZATION_MS   = 15000;     // Time to wait for estimator to settle [ms]
+constexpr uint32_t HIL_STABILIZATION_MS   = 20000;     // Time to wait for estimator to settle [ms]
 
 // --- Servo Specs ---
 constexpr uint16_t SERVO_MIN_PULSE        = 560;       // Pulse length for 0 deg (retracted) [us]
@@ -153,6 +153,12 @@ constexpr float    LANDING_ALT_THRESHOLD_M           = 10.0f;  // Max altitude f
 constexpr uint32_t LANDING_MIN_TIME_AFTER_APOGEE_MS  = 90000;  // Absolute safety timeout after apogee [ms]
 constexpr uint16_t LANDING_STABLE_TIME_MS            = 5000;   // Stability duration for lock [ms]
 constexpr uint32_t LANDING_MAX_WAIT_TIME_MS          = 600000; // Ultimate timeout (10 min) [ms]
+
+// =========================================================================
+// ATTITUDE ESTIMATOR & FILTERING
+// =========================================================================
+constexpr float ORIENTATION_MASK_MIN_G     = 0.5f;     // Ignore accel below this (Free-fall/Coast)
+constexpr float ORIENTATION_MASK_MAX_G     = 2.0f;     // Ignore accel above this (Thrust/Vibration)
 
 // =========================================================================
 // SYSTEM HEALTH & DIAGNOSTICS

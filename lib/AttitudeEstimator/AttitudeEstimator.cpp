@@ -14,7 +14,7 @@ AttitudeEstimator::AttitudeEstimator(IMUSensor* imu) : _imu(imu) {
  * @brief Main update loop. Pulls raw data from IMU and updates the active filter.
  * @param dt Time delta in seconds.
  */
-void AttitudeEstimator::update(float dt) {
+void AttitudeEstimator::update(float dt, bool ignoreAccel) {
     if (!_imu) return; 
     _deltaT = dt;
 
@@ -22,6 +22,12 @@ void AttitudeEstimator::update(float dt) {
     float ay = _imu->getAccY();
     float az = _imu->getAccZ();
     
+    // Automatic Accel Masking: Ignore if beyond thresholds
+    float a_norm = sqrt(ax * ax + ay * ay + az * az);
+    if (a_norm > ORIENTATION_MASK_MAX_G || a_norm < ORIENTATION_MASK_MIN_G) {
+        ignoreAccel = true;
+    }
+
     float gx = _imu->getGyroX_rads();
     float gy = _imu->getGyroY_rads();
     float gz = _imu->getGyroZ_rads();
@@ -32,13 +38,16 @@ void AttitudeEstimator::update(float dt) {
 
     switch (_filterSel) {
         case AttitudeFilterSel::MADGWICK:
-            updateMadgwick(ax, ay, az, gx, gy, gz, mx, my, mz);
+            updateMadgwick(ignoreAccel ? 0 : ax, ignoreAccel ? 0 : ay, ignoreAccel ? 0 : az, gx, gy, gz, mx, my, mz);
             break;
         case AttitudeFilterSel::MAHONY:
-            updateMahony(ax, ay, az, gx, gy, gz, mx, my, mz);
+            updateMahony(ignoreAccel ? 0 : ax, ignoreAccel ? 0 : ay, ignoreAccel ? 0 : az, gx, gy, gz, mx, my, mz);
             break;
         case AttitudeFilterSel::NONE:
             updateNone(ax, ay, az, gx, gy, gz);
+            break;
+        case AttitudeFilterSel::EKF:
+            // Placeholder: Not implemented
             break;
     }
 }
@@ -221,36 +230,53 @@ void AttitudeEstimator::updateMadgwick(float ax, float ay, float az, float gx, f
     qDot3 = 0.5f * (q0 * gy - q1 * gz + q3 * gx);
     qDot4 = 0.5f * (q0 * gz + q1 * gy - q2 * gx);
 
-    double a_norm = ax * ax + ay * ay + az * az;
-    if (a_norm == 0.) return;
-    recipNorm = 1.0 / sqrt(a_norm);
-    ax *= recipNorm; ay *= recipNorm; az *= recipNorm;
+    double a_norm_sq = ax * ax + ay * ay + az * az;
+    double m_norm_sq = mx * mx + my * my + mz * mz;
 
-    double m_norm = mx * mx + my * my + mz * mz;
-    if (m_norm == 0.) return;
-    recipNorm = 1.0 / sqrt(m_norm);
-    mx *= recipNorm; my *= recipNorm; mz *= recipNorm;
+    s0 = 0; s1 = 0; s2 = 0; s3 = 0;
 
-    _2q0mx = 2.0f * q0 * mx; _2q0my = 2.0f * q0 * my; _2q0mz = 2.0f * q0 * mz; _2q1mx = 2.0f * q1 * mx;
+    // Common term pre-computation
     _2q0 = 2.0f * q0; _2q1 = 2.0f * q1; _2q2 = 2.0f * q2; _2q3 = 2.0f * q3;
-    _2q0q2 = 2.0f * q0 * q2; _2q2q3 = 2.0f * q2 * q3;
     q0q0 = q0 * q0; q0q1 = q0 * q1; q0q2 = q0 * q2; q0q3 = q0 * q3;
     q1q1 = q1 * q1; q1q2 = q1 * q2; q1q3 = q1 * q3;
     q2q2 = q2 * q2; q2q3 = q2 * q3; q3q3 = q3 * q3;
 
-    hx = mx * q0q0 - _2q0my * q3 + _2q0mz * q2 + mx * q1q1 + _2q1 * my * q2 + _2q1 * mz * q3 - mx * q2q2 - mx * q3q3;
-    hy = _2q0mx * q3 + my * q0q0 - _2q0mz * q1 + _2q1mx * q2 - my * q1q1 + my * q2q2 + _2q2 * mz * q3 - my * q3q3;
-    _2bx = sqrt(hx * hx + hy * hy);
-    _2bz = -_2q0mx * q2 + _2q0my * q1 + mz * q0q0 + _2q1mx * q3 - mz * q1q1 + _2q2 * my * q3 - mz * q2q2 + mz * q3q3;
-    _4bx = 2.0f * _2bx; _4bz = 2.0f * _2bz;
+    // 1. Accelerometer Component
+    if (a_norm_sq > 0.0f) {
+        recipNorm = 1.0 / sqrt(a_norm_sq);
+        ax *= (float)recipNorm; ay *= (float)recipNorm; az *= (float)recipNorm;
 
-    s0 = -_2q2 * (2.0f * q1q3 - _2q0q2 - ax) + _2q1 * (2.0f * q0q1 + _2q2q3 - ay) - _2bz * q2 * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (-_2bx * q3 + _2bz * q1) * (_2bx * (q1q2 - q0q3) + _2bz * (q0q1 + q2q3) - my) + _2bx * q2 * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz);
-    s1 = _2q3 * (2.0f * q1q3 - _2q0q2 - ax) + _2q0 * (2.0f * q0q1 + _2q2q3 - ay) - 4.0f * q1 * (1 - 2.0f * q1q1 - 2.0f * q2q2 - az) + _2bz * q3 * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (_2bx * q2 + _2bz * q0) * (_2bx * (q1q2 - q0q3) + _2bz * (q0q1 + q2q3) - my) + (_2bx * q3 - _4bz * q1) * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz);
-    s2 = -_2q0 * (2.0f * q1q3 - _2q0q2 - ax) + _2q3 * (2.0f * q0q1 + _2q2q3 - ay) - 4.0f * q2 * (1 - 2.0f * q1q1 - 2.0f * q2q2 - az) + (-_4bx * q2 - _2bz * q0) * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (_2bx * q1 + _2bz * q3) * (_2bx * (q1q2 - q0q3) + _2bz * (q0q1 + q2q3) - my) + (_2bx * q0 - _4bz * q2) * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz);
-    s3 = _2q1 * (2.0f * q1q3 - _2q0q2 - ax) + _2q2 * (2.0f * q0q1 + _2q2q3 - ay) + (-_4bx * q3 + _2bz * q1) * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (-_2bx * q0 + _2bz * q2) * (_2bx * (q1q2 - q0q3) + _2bz * (q0q1 + q2q3) - my) + _2bx * q1 * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz);
-    
-    recipNorm = 1.0 / sqrt(s0 * s0 + s1 * s1 + s2 * s2 + s3 * s3);
-    s0 *= recipNorm; s1 *= recipNorm; s2 *= recipNorm; s3 *= recipNorm;
+        s0 += -_2q2 * (2.0f * (q1q3 - q0q2) - ax) + _2q1 * (2.0f * (q0q1 + q2q3) - ay);
+        s1 += _2q3 * (2.0f * (q1q3 - q0q2) - ax) + _2q0 * (2.0f * (q0q1 + q2q3) - ay) - 4.0f * q1 * (1.0f - 2.0f * q1q1 - 2.0f * q2q2 - az);
+        s2 += -_2q0 * (2.0f * (q1q3 - q0q2) - ax) + _2q3 * (2.0f * (q0q1 + q2q3) - ay) - 4.0f * q2 * (1.0f - 2.0f * q1q1 - 2.0f * q2q2 - az);
+        s3 += _2q1 * (2.0f * (q1q3 - q0q2) - ax) + _2q2 * (2.0f * (q0q1 + q2q3) - ay);
+    }
+
+    // 2. Magnetometer Component
+    if (m_norm_sq > 0.0f) {
+        recipNorm = 1.0 / sqrt(m_norm_sq);
+        mx *= (float)recipNorm; my *= (float)recipNorm; mz *= (float)recipNorm;
+
+        _2q0mx = 2.0f * q0 * mx; _2q0my = 2.0f * q0 * my; _2q0mz = 2.0f * q0 * mz; _2q1mx = 2.0f * q1 * mx;
+        _2q0q2 = 2.0f * q0 * q2; _2q2q3 = 2.0f * q2 * q3;
+
+        hx = mx * q0q0 - _2q0my * q3 + _2q0mz * q2 + mx * q1q1 + _2q1 * my * q2 + _2q1 * mz * q3 - mx * q2q2 - mx * q3q3;
+        hy = _2q0mx * q3 + my * q0q0 - _2q0mz * q1 + _2q1mx * q2 - my * q1q1 + my * q2q2 + _2q2 * mz * q3 - my * q3q3;
+        _2bx = sqrt(hx * hx + hy * hy);
+        _2bz = -_2q0mx * q2 + _2q0my * q1 + mz * q0q0 + _2q1mx * q3 - mz * q1q1 + _2q2 * my * q3 - mz * q2q2 + mz * q3q3;
+        _4bx = 2.0f * _2bx; _4bz = 2.0f * _2bz;
+
+        s0 += -_2bz * q2 * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (-_2bx * q3 + _2bz * q1) * (_2bx * (q1q2 - q0q3) + _2bz * (q0q1 + q2q3) - my) + _2bx * q2 * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz);
+        s1 += _2bz * q3 * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (_2bx * q2 + _2bz * q0) * (_2bx * (q1q2 - q0q3) + _2bz * (q0q1 + q2q3) - my) + (_2bx * q3 - _4bz * q1) * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz);
+        s2 += (-_4bx * q2 - _2bz * q0) * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (_2bx * q1 + _2bz * q3) * (_2bx * (q1q2 - q0q3) + _2bz * (0.5f - q1q1 - q2q2) - my) + (_2bx * q0 - _4bz * q2) * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz);
+        s3 += (-_4bx * q3 + _2bz * q1) * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (-_2bx * q0 + _2bz * q2) * (_2bx * (q1q2 - q0q3) + _2bz * (q0q1 + q2q3) - my) + _2bx * q1 * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz);
+    }
+
+    double s_norm_sq = s0 * s0 + s1 * s1 + s2 * s2 + s3 * s3;
+    if (s_norm_sq > 0.0) {
+        recipNorm = 1.0 / sqrt(s_norm_sq);
+        s0 *= (float)recipNorm; s1 *= (float)recipNorm; s2 *= (float)recipNorm; s3 *= (float)recipNorm;
+    }
 
     if (_useZeta) {
         double s_w_x = 2.0f * (q0 * s1 - q1 * s0 - q2 * s3 + q3 * s2);

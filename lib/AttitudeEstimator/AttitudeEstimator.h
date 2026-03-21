@@ -33,8 +33,9 @@ class AttitudeEstimator {
         /**
         * @brief Updates the filter with the latest IMU data.
         * @param dt Delta time since the last update in seconds.
+        * @param ignoreAccel If true, the accelerometer correction is skipped (Gyro-only integration).
         */
-        void update(float dt);
+        void update(float dt, bool ignoreAccel = false);
 
         // --- Configuration Getters & Setters ---
         /**

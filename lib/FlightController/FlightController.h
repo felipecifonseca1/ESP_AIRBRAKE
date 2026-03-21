@@ -23,6 +23,7 @@ struct LoopDiagnostics {
     uint32_t totalExecute_us;
     uint32_t loopInterval_us;
     uint32_t queueSend_us;
+    uint8_t flightState;
     
     // Statistics
     uint64_t totalCycles;

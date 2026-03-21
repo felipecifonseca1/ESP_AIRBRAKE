@@ -96,12 +96,12 @@ bool DataManager::setupInternalFlash(bool formatIfFailed) {
     }
     DEBUG_PRINTLN_F("FFAT: Initializing Internal Flash...");
     
-    if (!FFat.begin(false)) {
+    if (!FFat.begin(false, "/ffat", 10, "ffat")) {
         if (formatIfFailed) {
             DEBUG_PRINTLN_F("FFAT: Mount failed. Formatting...");
             if (FFat.format()) {
                 DEBUG_PRINTLN_F("FFAT: Format success. Mounting...");
-                if (!FFat.begin()) return false;
+                if (!FFat.begin(false, "/ffat", 10, "ffat")) return false;
             } else {
                 DEBUG_PRINTLN_F("FFAT: Format FAILED.");
                 return false;
@@ -251,10 +251,17 @@ void DataManager::closeSDCard() {
       
       if (_internalLogFile) {
           uint16_t remaining = _ffatBufferCount - _ffatWriteIndex;
-          DEBUG_PRINT_F("FFAT: Flushing final ");
-          DEBUG_PRINT(remaining);
-          DEBUG_PRINTLN_F(" records before closing.");
+          uint32_t writeStart = micros();
           _internalLogFile.write((uint8_t*)&_ffatBuffer[_ffatWriteIndex], remaining * sizeof(ScaledFlightData));
+          uint32_t duration = micros() - writeStart;
+          DEBUG_PRINTF("FFAT: Flushing final %u records (%u us).\n", remaining, duration);
+
+          // Update diagnostics for the final dump
+          _ioDiag.internalFlashWrite_us = duration;
+          if (_ioDiag.internalFlashWriteAvg_us == 0) _ioDiag.internalFlashWriteAvg_us = duration;
+          else _ioDiag.internalFlashWriteAvg_us = (_ioDiag.internalFlashWriteAvg_us * 9 + duration) / 10;
+          if (duration > _ioDiag.maxInternalFlashWrite_us) _ioDiag.maxInternalFlashWrite_us = duration;
+
           _ffatWriteIndex = _ffatBufferCount;
           _ioDiag.ffatBufferCount = 0;
       }
@@ -562,20 +569,53 @@ void DataManager::listInternalFiles() {
   }
   DEBUG_PRINTLN_F("\n--- Internal Flash Files ---");
   File root = FFat.open("/");
+  if (!root || !root.isDirectory()) {
+    DEBUG_PRINTLN_F("FFAT: Root directory not accessible.");
+    return;
+  }
+
   File file = root.openNextFile();
+  int count = 0;
   while (file) {
-    DEBUG_PRINT_F("File: ");
-    DEBUG_PRINT(file.name());
-    DEBUG_PRINT_F("  Size: ");
-    DEBUG_PRINTLN(file.size());
+    if (!file.isDirectory()) {
+        DEBUG_PRINT_F("  ");
+        DEBUG_PRINT(file.name());
+        DEBUG_PRINT_F("\tSize: ");
+        
+        size_t fileSize = file.size();
+        if (fileSize == 0 && _ffatAvailable && _internalLogFile) {
+            // Robust check: compare names stripping any leading slashes
+            String n1 = String(file.name());
+            String n2 = _currentInternalFileName;
+            if (n1.startsWith("/")) n1 = n1.substring(1);
+            if (n2.startsWith("/")) n2 = n2.substring(1);
+            
+            if (n1 == n2) {
+                fileSize = _internalLogFile.size();
+            }
+        }
+
+        DEBUG_PRINT(fileSize / 1024.0);
+        DEBUG_PRINTLN_F(" KB");
+        count++;
+    }
     file = root.openNextFile();
     
     // Safety
     esp_task_wdt_reset();
     vTaskDelay(1);
   }
-  DEBUG_PRINT_F("FFAT Free: ");
-  DEBUG_PRINTLN(FFat.freeBytes() / 1024);
+
+  if (count == 0) {
+      DEBUG_PRINTLN_F("  (No files found)");
+  }
+
+  DEBUG_PRINTLN_F("--------------------------------");
+  DEBUG_PRINT_F("FFAT Total: ");
+  DEBUG_PRINT(FFat.totalBytes() / 1024);
+  DEBUG_PRINT_F(" KB, Free: ");
+  DEBUG_PRINT(FFat.freeBytes() / 1024);
+  DEBUG_PRINTLN_F(" KB");
 }
 
 void DataManager::dumpInternalFlash(int fileIndex) {
@@ -607,7 +647,7 @@ void DataManager::dumpInternalFlash(int fileIndex) {
   ScaledFlightData record;
   uint32_t recordCount = 0;
   while (f.read((uint8_t*)&record, sizeof(record)) == sizeof(record)) {
-    Serial.printf("%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%.4f,%.4f,%.4f,%.1f,%.2f,%.2f,%.2f,%u,%u,%d\n",
+    DEBUG_PRINTF("%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%.4f,%.4f,%.4f,%.1f,%.2f,%.2f,%.2f,%u,%u,%d\n",
         record.timestamp_ms,
         record.accX_scaled / 1000.0f, record.accY_scaled / 1000.0f, record.accZ_scaled / 1000.0f,
         record.gyroX_scaled / 100.0f, record.gyroY_scaled / 100.0f, record.gyroZ_scaled / 100.0f,
@@ -633,9 +673,19 @@ void DataManager::dumpInternalFlash(int fileIndex) {
 }
 
 void DataManager::clearInternalFlash() {
-    DEBUG_PRINTLN_F("FFAT: Formatting internal flash...");
+    DEBUG_PRINTLN_F("FFAT: Unmounting and formatting internal flash...");
+    _ffatAvailable = false;
+    if (_internalLogFile) _internalLogFile.close();
+    FFat.end(); // Unmount to allow formatting
+    
     if (FFat.format()) {
-        DEBUG_PRINTLN_F("FFAT: Format complete.");
+        DEBUG_PRINTLN_F("FFAT: Format complete. Re-mounting...");
+        if (FFat.begin(false, "/ffat", 10, "ffat")) {
+            _ffatAvailable = true;
+            DEBUG_PRINTLN_F("FFAT: Ready.");
+        } else {
+            DEBUG_PRINTLN_F("FFAT: Re-mount failed.");
+        }
     } else {
         DEBUG_PRINTLN_F("FFAT: Format FAILED.");
     }
