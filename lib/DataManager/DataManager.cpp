@@ -12,14 +12,22 @@ DataManager::DataManager()
     : _loggingActive(false), _stopRequested(false), _HILLoggingActive(false),
       _decimationFactor(1), _decimationCounter(0), _sdAvailable(false),
       _sdRecordCounter(0), _sdLEDCounter(0), _sdBuffer(""), _sdBufferCount(0),
-      _ffatRecordCounter(0), _ffatBufferCount(0),
+      _ffatRecordCounter(0), _ffatBuffer(nullptr), _ffatBufferCount(0), _ffatWriteIndex(0),
       _pinSDIO_DET(PIN_SDIO_DET),
       _pinCS_Flash(PIN_FLASH_CS), _flash(nullptr), _flashAddr(0),
       _flashAvailable(false), _currentHILMode(HILMode::NONE),
       _hilStabilizing(false), _ffatAvailable(false),
       _sdEnabled(ENABLE_SD_LOGGING), 
       _internalEnabled(ENABLE_INTERNAL_LOGGING), 
-      _externalEnabled(ENABLE_EXTERNAL_LOGGING) {}
+      _externalEnabled(ENABLE_EXTERNAL_LOGGING) {
+          
+      // Allocate massive PSRAM buffer
+      _ffatBuffer = (ScaledFlightData*) heap_caps_malloc(LOG_BUFFER_SIZE_INT * sizeof(ScaledFlightData), MALLOC_CAP_SPIRAM);
+      if (!_ffatBuffer) {
+          // Fallback to minimal SRAM buffer
+          _ffatBuffer = (ScaledFlightData*) malloc(100 * sizeof(ScaledFlightData));
+      }
+}
 
 // --- Initialization ---
 
@@ -236,17 +244,18 @@ void DataManager::closeSDCard() {
     }
   }
 
-  if (_ffatAvailable && _ffatBufferCount > 0) {
+  if (_ffatAvailable && _ffatBufferCount > _ffatWriteIndex) {
       if (!_internalLogFile) {
           _internalLogFile = FFat.open(_currentInternalFileName, FILE_APPEND);
       }
       
       if (_internalLogFile) {
+          uint16_t remaining = _ffatBufferCount - _ffatWriteIndex;
           DEBUG_PRINT_F("FFAT: Flushing final ");
-          DEBUG_PRINT(_ffatBufferCount);
+          DEBUG_PRINT(remaining);
           DEBUG_PRINTLN_F(" records before closing.");
-          _internalLogFile.write((uint8_t*)_ffatBuffer, _ffatBufferCount * sizeof(ScaledFlightData));
-          _ffatBufferCount = 0;
+          _internalLogFile.write((uint8_t*)&_ffatBuffer[_ffatWriteIndex], remaining * sizeof(ScaledFlightData));
+          _ffatWriteIndex = _ffatBufferCount;
           _ioDiag.ffatBufferCount = 0;
       }
   }
@@ -451,42 +460,86 @@ void DataManager::writeToInternal(const RawFlightData& data) {
     record.gain2_scaled = (int16_t)(data.cd_gain * 100.0f);
     record.flightState = data.flightState;
 
-    // Binary logging to FFat RAM Buffer
-    _ffatBuffer[_ffatBufferCount] = record;
-    _ffatBufferCount++;
-    _ioDiag.ffatBufferCount = _ffatBufferCount;
+    // FlightState enum mapping: WAIT_LAUNCH is 2 or less, DESCENT is 7, LANDING is 8
+    bool isPad = (data.flightState <= 2);
+    bool isDescent = (data.flightState == 7 || data.flightState == 8);
+    bool isAscent = (!isPad && !isDescent);
 
-    // Write buffer to Flash in one big chunk
-    if (_ffatBufferCount >= LOG_BUFFER_SIZE_INT) {
-        if (!_internalLogFile) {
-            _internalLogFile = FFat.open(_currentInternalFileName, FILE_APPEND);
+    if (isPad) {
+        // Pad Phase: Buffer small amounts and flush to flash regularly
+        if (_ffatBuffer && _ffatBufferCount < LOG_BUFFER_SIZE_INT) {
+            _ffatBuffer[_ffatBufferCount] = record;
+            _ffatBufferCount++;
+            _ioDiag.ffatBufferCount = _ffatBufferCount;
         }
 
-        if (_internalLogFile) {
-            uint32_t writeStart = micros();
-            _internalLogFile.write((const uint8_t*)_ffatBuffer, _ffatBufferCount * sizeof(ScaledFlightData));
-            _ioDiag.internalFlashWrite_us = micros() - writeStart;
-            
-            // Low-pass filter for average (Alpha = 0.1)
-            if (_ioDiag.internalFlashWriteAvg_us == 0) _ioDiag.internalFlashWriteAvg_us = _ioDiag.internalFlashWrite_us;
-            else _ioDiag.internalFlashWriteAvg_us = (_ioDiag.internalFlashWriteAvg_us * 9 + _ioDiag.internalFlashWrite_us) / 10;
+        if (_ffatBufferCount >= LOG_PAD_FLUSH_SIZE) {
+            if (!_internalLogFile) {
+                _internalLogFile = FFat.open(_currentInternalFileName, FILE_APPEND);
+            }
+            if (_internalLogFile) {
+                uint32_t writeStart = micros();
+                _internalLogFile.write((const uint8_t*)_ffatBuffer, _ffatBufferCount * sizeof(ScaledFlightData));
+                _ioDiag.internalFlashWrite_us = micros() - writeStart;
+                
+                if (_ioDiag.internalFlashWriteAvg_us == 0) _ioDiag.internalFlashWriteAvg_us = _ioDiag.internalFlashWrite_us;
+                else _ioDiag.internalFlashWriteAvg_us = (_ioDiag.internalFlashWriteAvg_us * 9 + _ioDiag.internalFlashWrite_us) / 10;
 
-            if (_ioDiag.internalFlashWrite_us > _ioDiag.maxInternalFlashWrite_us) {
-                _ioDiag.maxInternalFlashWrite_us = _ioDiag.internalFlashWrite_us;
+                if (_ioDiag.internalFlashWrite_us > _ioDiag.maxInternalFlashWrite_us) {
+                    _ioDiag.maxInternalFlashWrite_us = _ioDiag.internalFlashWrite_us;
+                }
+                
+                // Because we flushed from the beginning of RAM, reset buffer count
+                _ffatBufferCount = 0;
+                _ioDiag.ffatBufferCount = 0;
+                
+                // Periodic sync
+                _ffatRecordCounter += LOG_PAD_FLUSH_SIZE;
+                if (_ffatRecordCounter >= LOG_SYNC_INTERVAL_INT) {
+                    _internalLogFile.close();
+                    _ffatRecordCounter = 0;
+                }
+            }
+        }
+    } else if (isAscent) {
+        // Ascent Phase: Massive PSRAM buffer only, NO flash writes!
+        if (_ffatBuffer && _ffatBufferCount < LOG_BUFFER_SIZE_INT) {
+            _ffatBuffer[_ffatBufferCount] = record;
+            _ffatBufferCount++;
+            _ioDiag.ffatBufferCount = _ffatBufferCount;
+        }
+    } else if (isDescent) {
+        // Descent Phase: Stop accumulating. Trickle dump the accumulated PSRAM buffer to Flash.
+        if (_ffatWriteIndex < _ffatBufferCount) {
+            if (!_internalLogFile) {
+                _internalLogFile = FFat.open(_currentInternalFileName, FILE_APPEND);
             }
 
-            _ffatBufferCount = 0;
-            _ffatRecordCounter += LOG_BUFFER_SIZE_INT;
-        }
-    }
+            if (_internalLogFile) {
+                uint32_t writeStart = micros();
+                
+                uint16_t recordsRemaining = _ffatBufferCount - _ffatWriteIndex;
+                uint16_t chunkSize = (recordsRemaining > LOG_CHUNK_SIZE_DESCENT) ? LOG_CHUNK_SIZE_DESCENT : recordsRemaining;
+                
+                _internalLogFile.write((const uint8_t*)&_ffatBuffer[_ffatWriteIndex], chunkSize * sizeof(ScaledFlightData));
+                
+                _ioDiag.internalFlashWrite_us = micros() - writeStart;
+                
+                if (_ioDiag.internalFlashWriteAvg_us == 0) _ioDiag.internalFlashWriteAvg_us = _ioDiag.internalFlashWrite_us;
+                else _ioDiag.internalFlashWriteAvg_us = (_ioDiag.internalFlashWriteAvg_us * 9 + _ioDiag.internalFlashWrite_us) / 10;
 
-    // Periodic sync for FFat (Safety)
-    if (_ffatRecordCounter >= LOG_SYNC_INTERVAL_INT) {
-        if (_internalLogFile) {
-            _internalLogFile.close(); // Forces sync to Flash
-            // _internalLogFile will be reopened on next buffer flush
+                if (_ioDiag.internalFlashWrite_us > _ioDiag.maxInternalFlashWrite_us) {
+                    _ioDiag.maxInternalFlashWrite_us = _ioDiag.internalFlashWrite_us;
+                }
+
+                _ffatWriteIndex += chunkSize;
+                _ioDiag.ffatBufferCount = _ffatBufferCount - _ffatWriteIndex; // Update UI to show remaining to flush
+                
+                if (_ffatWriteIndex >= _ffatBufferCount) {
+                    _internalLogFile.close(); // Sync when all data is finally dumped
+                }
+            }
         }
-        _ffatRecordCounter = 0;
     }
 }
 

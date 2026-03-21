@@ -219,8 +219,9 @@ private:
     bool _ffatAvailable;
     bool _internalEnabled; 
     uint32_t _ffatRecordCounter; // Records since last file close
-    ScaledFlightData _ffatBuffer[LOG_BUFFER_SIZE_INT]; // RAM buffer for binary records
+    ScaledFlightData* _ffatBuffer; // Pointer for dynamically allocated PSRAM buffer
     uint16_t _ffatBufferCount;   // Current records in RAM buffer
+    uint16_t _ffatWriteIndex;    // Tracks the flush position during descent
     
     // Flash SPI
     const u_int8_t _pinCS_Flash = PIN_FLASH_CS;
