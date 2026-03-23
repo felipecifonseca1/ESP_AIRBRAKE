@@ -91,21 +91,21 @@ constexpr char     SD_LOG_FOLDER[]        = "/REG_VOO";
 constexpr char     SD_LOG_BASENAME[]      = "VOO_";
 constexpr uint16_t SD_MAX_LOG_FILES       = 1000; 
 constexpr uint32_t SD_WRITE_TIMEOUT_MS    = 80;         // Max time allowed for single write [ms]
-constexpr uint8_t LOG_BUFFER_SIZE_SD      = 10;         // Records to buffer in RAM before SD write
+constexpr uint8_t  LOG_BUFFER_SIZE_SD     = 5;          // Records to buffer in RAM before SD write
 constexpr uint16_t LOG_BUFFER_SIZE_INT    = 15000;      // Binary records to buffer in PSRAM (~660KB)
 constexpr uint16_t LOG_PAD_FLUSH_SIZE     = 50;         // Pad Mode: Records to buffer before Flash write
 constexpr uint16_t LOG_CHUNK_SIZE_DESCENT = 50;         // Descent: Records to trickle-write per cycle
-constexpr uint16_t LOG_SYNC_INTERVAL_SD   = 1;          // Sync every buffer flush
+constexpr uint16_t LOG_SYNC_INTERVAL_SD   = 10;         // Sync every buffer flush
 constexpr uint16_t LOG_SYNC_INTERVAL_INT  = 15000;      // Sync Internal Flash 
 
 // --- HIL (Hardware-In-the-Loop) ---
-constexpr bool HIL_MODE_ACTIVE            = true;      // Enable serial-in sensor simulation
+constexpr bool HIL_MODE_ACTIVE            = true;       // Enable serial-in sensor simulation
 constexpr char HIL_FILENAME[]             = "/Teste_HIL_Sensors_no_bias.csv";
-constexpr uint32_t HIL_STABILIZATION_MS   = 20000;     // Time to wait for estimator to settle [ms]
+constexpr uint32_t HIL_STABILIZATION_MS   = 30000;      // Time to wait for estimator to settle [ms]
 
 // --- Servo Specs ---
-constexpr uint16_t SERVO_MIN_PULSE        = 560;       // Pulse length for 0 deg (retracted) [us]
-constexpr uint16_t SERVO_MAX_PULSE        = 1520;      // Pulse length for 90 deg (extended) [us]
+constexpr uint16_t SERVO_MIN_PULSE        = 560;        // Pulse length for 0 deg (retracted) [us]
+constexpr uint16_t SERVO_MAX_PULSE        = 1520;       // Pulse length for 90 deg (extended) [us]
 
 // =========================================================================
 // FLIGHT CONTROLLER TUNING

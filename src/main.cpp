@@ -227,11 +227,11 @@ void TaskSerialComm(void *pvParameters) {
             // Phase-aware buffer reporting
             uint8_t state = diag.flightState; 
             if (state <= 2) { // PAD phase
-                DEBUG_PRINTF("Flash Buffer:    %u / %u (Pad)\n", ioDiag.ffatBufferCount, LOG_PAD_FLUSH_SIZE);
+                DEBUG_PRINTF("Flash Buffer:    %u / %u (Pad)\n", ioDiag.internalFlashBufferCount, LOG_PAD_FLUSH_SIZE);
             } else if (state <= 6) { // ASCENT phase
-                DEBUG_PRINTF("Flash Buffer:    %u / %u (Buffered)\n", ioDiag.ffatBufferCount, LOG_BUFFER_SIZE_INT);
+                DEBUG_PRINTF("Flash Buffer:    %u / %u (Buffered)\n", ioDiag.internalFlashBufferCount, LOG_BUFFER_SIZE_INT);
             } else { // DESCENT (7-8)
-                DEBUG_PRINTF("Flash Flushing:  %u remaining\n", ioDiag.ffatBufferCount);
+                DEBUG_PRINTF("Flash Flushing:  %u remaining\n", ioDiag.internalFlashBufferCount);
             }
 
             DEBUG_PRINTF("Telemetry (Avg):  %u us\n", ioDiag.telemetryPrint_us);
@@ -274,7 +274,7 @@ void setup() {
   SystemUtils::verifyModule(logger.setupSD(), "SD Card", false);
   
   DEBUG_PRINTLN_F("Initializing Internal Flash...");
-  SystemUtils::verifyModule(logger.setupInternalFlash(true), "FFat", false);
+  SystemUtils::verifyModule(logger.setupInternalFlash(true), "LittleFS", false);
 
   // IMU Setup
   if (isCrashRecovery) {

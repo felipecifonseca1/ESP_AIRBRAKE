@@ -12,7 +12,7 @@
 #include <FS.h>
 #include <SD_MMC.h>
 #include <SPI.h>
-#include <FFat.h>
+#include <LittleFS.h>
 #include <SPIMemory.h>
 #include "Config_voo.h"
 
@@ -86,7 +86,7 @@ struct IODiagnostics {
     uint32_t totalTaskCycle_us;
     uint32_t maxSdWrite_us;
     uint32_t maxInternalFlashWrite_us;
-    uint16_t ffatBufferCount;
+    uint16_t internalFlashBufferCount;
 };
 
 class DataManager {
@@ -213,15 +213,15 @@ private:
     // --- Diagnostics ---
     IODiagnostics _ioDiag = {0};
 
-    // Internal Flash (FFat)
+    // Internal Flash (LittleFS)
     File _internalLogFile;
     String _currentInternalFileName;
-    bool _ffatAvailable;
+    bool _littlefsAvailable;
     bool _internalEnabled; 
-    uint32_t _ffatRecordCounter; // Records since last file close
-    ScaledFlightData* _ffatBuffer; // Pointer for dynamically allocated PSRAM buffer
-    uint16_t _ffatBufferCount;   // Current records in RAM buffer
-    uint16_t _ffatWriteIndex;    // Tracks the flush position during descent
+    uint32_t _internalRecordCounter; // Records since last file close
+    ScaledFlightData* _internalBuffer; // Pointer for dynamically allocated PSRAM buffer
+    uint16_t _internalBufferCount;   // Current records in RAM buffer
+    uint16_t _internalWriteIndex;    // Tracks the flush position during descent
     
     // Flash SPI
     const u_int8_t _pinCS_Flash = PIN_FLASH_CS;

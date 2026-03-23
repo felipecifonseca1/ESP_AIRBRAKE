@@ -12,20 +12,20 @@ DataManager::DataManager()
     : _loggingActive(false), _stopRequested(false), _HILLoggingActive(false),
       _decimationFactor(1), _decimationCounter(0), _sdAvailable(false),
       _sdRecordCounter(0), _sdLEDCounter(0), _sdBuffer(""), _sdBufferCount(0),
-      _ffatRecordCounter(0), _ffatBuffer(nullptr), _ffatBufferCount(0), _ffatWriteIndex(0),
+      _internalRecordCounter(0), _internalBuffer(nullptr), _internalBufferCount(0), _internalWriteIndex(0),
       _pinSDIO_DET(PIN_SDIO_DET),
       _pinCS_Flash(PIN_FLASH_CS), _flash(nullptr), _flashAddr(0),
       _flashAvailable(false), _currentHILMode(HILMode::NONE),
-      _hilStabilizing(false), _ffatAvailable(false),
+      _hilStabilizing(false), _littlefsAvailable(false),
       _sdEnabled(ENABLE_SD_LOGGING), 
       _internalEnabled(ENABLE_INTERNAL_LOGGING), 
       _externalEnabled(ENABLE_EXTERNAL_LOGGING) {
           
       // Allocate massive PSRAM buffer
-      _ffatBuffer = (ScaledFlightData*) heap_caps_malloc(LOG_BUFFER_SIZE_INT * sizeof(ScaledFlightData), MALLOC_CAP_SPIRAM);
-      if (!_ffatBuffer) {
+      _internalBuffer = (ScaledFlightData*) heap_caps_malloc(LOG_BUFFER_SIZE_INT * sizeof(ScaledFlightData), MALLOC_CAP_SPIRAM);
+      if (!_internalBuffer) {
           // Fallback to minimal SRAM buffer
-          _ffatBuffer = (ScaledFlightData*) malloc(100 * sizeof(ScaledFlightData));
+          _internalBuffer = (ScaledFlightData*) malloc(100 * sizeof(ScaledFlightData));
       }
 }
 
@@ -90,20 +90,21 @@ bool DataManager::setupSD() {
  */
 bool DataManager::setupInternalFlash(bool formatIfFailed) {
     if (!ENABLE_DATA_LOGGING || !ENABLE_INTERNAL_LOGGING) {
-        DEBUG_PRINTLN_F("FFAT: Internal logging disabled by configuration.");
-        _ffatAvailable = false;
+        DEBUG_PRINTLN_F("STORAGE: Internal logging disabled by configuration.");
+        _littlefsAvailable = false;
         return true;
     }
-    DEBUG_PRINTLN_F("FFAT: Initializing Internal Flash...");
+    DEBUG_PRINTLN_F("LITTLEFS: Initializing Internal Flash...");
     
-    if (!FFat.begin(false, "/ffat", 10, "ffat")) {
+    // Mount with custom partition name "littlefs"
+    if (!LittleFS.begin(false, "/littlefs", 10, "littlefs")) {
         if (formatIfFailed) {
-            DEBUG_PRINTLN_F("FFAT: Mount failed. Formatting...");
-            if (FFat.format()) {
-                DEBUG_PRINTLN_F("FFAT: Format success. Mounting...");
-                if (!FFat.begin(false, "/ffat", 10, "ffat")) return false;
+            DEBUG_PRINTLN_F("LITTLEFS: Mount failed. Formatting...");
+            if (LittleFS.format()) {
+                DEBUG_PRINTLN_F("LITTLEFS: Format success. Mounting...");
+                if (!LittleFS.begin(false, "/littlefs", 10, "littlefs")) return false;
             } else {
-                DEBUG_PRINTLN_F("FFAT: Format FAILED.");
+                DEBUG_PRINTLN_F("LITTLEFS: Format FAILED.");
                 return false;
             }
         } else {
@@ -111,25 +112,25 @@ bool DataManager::setupInternalFlash(bool formatIfFailed) {
         }
     }
 
-    DEBUG_PRINT_F("FFAT: Total: ");
-    DEBUG_PRINT(FFat.totalBytes() / 1024);
+    DEBUG_PRINT_F("LITTLEFS: Total: ");
+    DEBUG_PRINT(LittleFS.totalBytes() / 1024);
     DEBUG_PRINT_F("KB, Free: ");
-    DEBUG_PRINTLN(FFat.freeBytes() / 1024);
+    DEBUG_PRINTLN((LittleFS.totalBytes() - LittleFS.usedBytes()) / 1024);
 
     // Generate indexing for files
     char buf[32];
     int index = 0;
     while (index < 999) {
         snprintf(buf, sizeof(buf), "/log_%03d.bin", index);
-        if (!FFat.exists(buf)) break;
+        if (!LittleFS.exists(buf)) break;
         index++;
     }
-    _ffatRecordCounter = index; // Store latest index
+    _internalRecordCounter = index; // Store latest index
     _currentInternalFileName = String(buf);
-    DEBUG_PRINT_F("FFAT: Current file: ");
+    DEBUG_PRINT_F("LITTLEFS: Current file: ");
     DEBUG_PRINTLN(_currentInternalFileName);
 
-    _ffatAvailable = true;
+    _littlefsAvailable = true;
     return true;
 }
 
@@ -244,17 +245,17 @@ void DataManager::closeSDCard() {
     }
   }
 
-  if (_ffatAvailable && _ffatBufferCount > _ffatWriteIndex) {
+  if (_littlefsAvailable && _internalBufferCount > _internalWriteIndex) {
       if (!_internalLogFile) {
-          _internalLogFile = FFat.open(_currentInternalFileName, FILE_APPEND);
+          _internalLogFile = LittleFS.open(_currentInternalFileName, FILE_APPEND);
       }
       
       if (_internalLogFile) {
-          uint16_t remaining = _ffatBufferCount - _ffatWriteIndex;
+          uint16_t remaining = _internalBufferCount - _internalWriteIndex;
           uint32_t writeStart = micros();
-          _internalLogFile.write((uint8_t*)&_ffatBuffer[_ffatWriteIndex], remaining * sizeof(ScaledFlightData));
+          _internalLogFile.write((uint8_t*)&_internalBuffer[_internalWriteIndex], remaining * sizeof(ScaledFlightData));
           uint32_t duration = micros() - writeStart;
-          DEBUG_PRINTF("FFAT: Flushing final %u records (%u us).\n", remaining, duration);
+          DEBUG_PRINTF("STORAGE: Flushing final %u records (%u us).\n", remaining, duration);
 
           // Update diagnostics for the final dump
           _ioDiag.internalFlashWrite_us = duration;
@@ -262,8 +263,8 @@ void DataManager::closeSDCard() {
           else _ioDiag.internalFlashWriteAvg_us = (_ioDiag.internalFlashWriteAvg_us * 9 + duration) / 10;
           if (duration > _ioDiag.maxInternalFlashWrite_us) _ioDiag.maxInternalFlashWrite_us = duration;
 
-          _ffatWriteIndex = _ffatBufferCount;
-          _ioDiag.ffatBufferCount = 0;
+          _internalWriteIndex = _internalBufferCount;
+          _ioDiag.internalFlashBufferCount = 0;
       }
   }
 
@@ -271,7 +272,7 @@ void DataManager::closeSDCard() {
       _internalLogFile.close();
   }
 
-  DEBUG_PRINTLN_F("LOG: SD card closed.");
+  DEBUG_PRINTLN_F("LOG: Recording context closed.");
   _loggingActive = false;
 }
 
@@ -298,16 +299,16 @@ void DataManager::forceSync() {
   }
 
   // 2. Flush and sync Internal Flash
-  if (_ffatAvailable && _internalLogFile) {
-      if (_ffatBufferCount > 0) {
-          _internalLogFile.write((uint8_t*)_ffatBuffer, _ffatBufferCount * sizeof(ScaledFlightData));
-          _ffatBufferCount = 0;
+  if (_littlefsAvailable && _internalLogFile) {
+      if (_internalBufferCount > 0) {
+          _internalLogFile.write((uint8_t*)_internalBuffer, _internalBufferCount * sizeof(ScaledFlightData));
+          _internalBufferCount = 0;
       }
       _internalLogFile.close();
       
       // Reopen to continue logging
-      _internalLogFile = FFat.open(_currentInternalFileName, FILE_APPEND);
-      _ffatRecordCounter = 0;
+      _internalLogFile = LittleFS.open(_currentInternalFileName, FILE_APPEND);
+      _internalRecordCounter = 0;
   }
 
   DEBUG_PRINTLN_F("LOG: Force sync completed.");
@@ -341,7 +342,7 @@ void DataManager::logFlightData(const RawFlightData& data) {
   }
 
   // 2. Internal Flash Logging
-  if (_ffatAvailable && _internalEnabled) {
+  if (_littlefsAvailable && _internalEnabled) {
       writeToInternal(data);
   }
 
@@ -474,19 +475,19 @@ void DataManager::writeToInternal(const RawFlightData& data) {
 
     if (isPad) {
         // Pad Phase: Buffer small amounts and flush to flash regularly
-        if (_ffatBuffer && _ffatBufferCount < LOG_BUFFER_SIZE_INT) {
-            _ffatBuffer[_ffatBufferCount] = record;
-            _ffatBufferCount++;
-            _ioDiag.ffatBufferCount = _ffatBufferCount;
+        if (_internalBuffer && _internalBufferCount < LOG_BUFFER_SIZE_INT) {
+            _internalBuffer[_internalBufferCount] = record;
+            _internalBufferCount++;
+            _ioDiag.internalFlashBufferCount = _internalBufferCount;
         }
 
-        if (_ffatBufferCount >= LOG_PAD_FLUSH_SIZE) {
+        if (_internalBufferCount >= LOG_PAD_FLUSH_SIZE) {
             if (!_internalLogFile) {
-                _internalLogFile = FFat.open(_currentInternalFileName, FILE_APPEND);
+                _internalLogFile = LittleFS.open(_currentInternalFileName, FILE_APPEND);
             }
             if (_internalLogFile) {
                 uint32_t writeStart = micros();
-                _internalLogFile.write((const uint8_t*)_ffatBuffer, _ffatBufferCount * sizeof(ScaledFlightData));
+                _internalLogFile.write((const uint8_t*)_internalBuffer, _internalBufferCount * sizeof(ScaledFlightData));
                 _ioDiag.internalFlashWrite_us = micros() - writeStart;
                 
                 if (_ioDiag.internalFlashWriteAvg_us == 0) _ioDiag.internalFlashWriteAvg_us = _ioDiag.internalFlashWrite_us;
@@ -497,38 +498,38 @@ void DataManager::writeToInternal(const RawFlightData& data) {
                 }
                 
                 // Because we flushed from the beginning of RAM, reset buffer count
-                _ffatBufferCount = 0;
-                _ioDiag.ffatBufferCount = 0;
+                _internalBufferCount = 0;
+                _ioDiag.internalFlashBufferCount = 0;
                 
                 // Periodic sync
-                _ffatRecordCounter += LOG_PAD_FLUSH_SIZE;
-                if (_ffatRecordCounter >= LOG_SYNC_INTERVAL_INT) {
+                _internalRecordCounter += LOG_PAD_FLUSH_SIZE;
+                if (_internalRecordCounter >= LOG_SYNC_INTERVAL_INT) {
                     _internalLogFile.close();
-                    _ffatRecordCounter = 0;
+                    _internalRecordCounter = 0;
                 }
             }
         }
     } else if (isAscent) {
         // Ascent Phase: Massive PSRAM buffer only, NO flash writes!
-        if (_ffatBuffer && _ffatBufferCount < LOG_BUFFER_SIZE_INT) {
-            _ffatBuffer[_ffatBufferCount] = record;
-            _ffatBufferCount++;
-            _ioDiag.ffatBufferCount = _ffatBufferCount;
+        if (_internalBuffer && _internalBufferCount < LOG_BUFFER_SIZE_INT) {
+            _internalBuffer[_internalBufferCount] = record;
+            _internalBufferCount++;
+            _ioDiag.internalFlashBufferCount = _internalBufferCount;
         }
     } else if (isDescent) {
         // Descent Phase: Stop accumulating. Trickle dump the accumulated PSRAM buffer to Flash.
-        if (_ffatWriteIndex < _ffatBufferCount) {
+        if (_internalWriteIndex < _internalBufferCount) {
             if (!_internalLogFile) {
-                _internalLogFile = FFat.open(_currentInternalFileName, FILE_APPEND);
+                _internalLogFile = LittleFS.open(_currentInternalFileName, FILE_APPEND);
             }
 
             if (_internalLogFile) {
                 uint32_t writeStart = micros();
                 
-                uint16_t recordsRemaining = _ffatBufferCount - _ffatWriteIndex;
+                uint16_t recordsRemaining = _internalBufferCount - _internalWriteIndex;
                 uint16_t chunkSize = (recordsRemaining > LOG_CHUNK_SIZE_DESCENT) ? LOG_CHUNK_SIZE_DESCENT : recordsRemaining;
                 
-                _internalLogFile.write((const uint8_t*)&_ffatBuffer[_ffatWriteIndex], chunkSize * sizeof(ScaledFlightData));
+                _internalLogFile.write((const uint8_t*)&_internalBuffer[_internalWriteIndex], chunkSize * sizeof(ScaledFlightData));
                 
                 _ioDiag.internalFlashWrite_us = micros() - writeStart;
                 
@@ -539,10 +540,10 @@ void DataManager::writeToInternal(const RawFlightData& data) {
                     _ioDiag.maxInternalFlashWrite_us = _ioDiag.internalFlashWrite_us;
                 }
 
-                _ffatWriteIndex += chunkSize;
-                _ioDiag.ffatBufferCount = _ffatBufferCount - _ffatWriteIndex; // Update UI to show remaining to flush
+                _internalWriteIndex += chunkSize;
+                _ioDiag.internalFlashBufferCount = _internalBufferCount - _internalWriteIndex; // Update UI to show remaining to flush
                 
-                if (_ffatWriteIndex >= _ffatBufferCount) {
+                if (_internalWriteIndex >= _internalBufferCount) {
                     _internalLogFile.close(); // Sync when all data is finally dumped
                 }
             }
@@ -563,14 +564,14 @@ void DataManager::writeToExternal(const RawFlightData& data) {
  * @brief Lists all files in the internal flash memory.
  */
 void DataManager::listInternalFiles() {
-  if (!_ffatAvailable) {
-    DEBUG_PRINTLN_F("FFAT: Internal flash not available.");
+  if (!_littlefsAvailable) {
+    DEBUG_PRINTLN_F("LITTLEFS: Internal flash not available.");
     return;
   }
   DEBUG_PRINTLN_F("\n--- Internal Flash Files ---");
-  File root = FFat.open("/");
+  File root = LittleFS.open("/");
   if (!root || !root.isDirectory()) {
-    DEBUG_PRINTLN_F("FFAT: Root directory not accessible.");
+    DEBUG_PRINTLN_F("LITTLEFS: Root directory not accessible.");
     return;
   }
 
@@ -583,7 +584,7 @@ void DataManager::listInternalFiles() {
         DEBUG_PRINT_F("\tSize: ");
         
         size_t fileSize = file.size();
-        if (fileSize == 0 && _ffatAvailable && _internalLogFile) {
+        if (fileSize == 0 && _littlefsAvailable && _internalLogFile) {
             // Robust check: compare names stripping any leading slashes
             String n1 = String(file.name());
             String n2 = _currentInternalFileName;
@@ -611,20 +612,20 @@ void DataManager::listInternalFiles() {
   }
 
   DEBUG_PRINTLN_F("--------------------------------");
-  DEBUG_PRINT_F("FFAT Total: ");
-  DEBUG_PRINT(FFat.totalBytes() / 1024);
+  DEBUG_PRINT_F("LITTLEFS Total: ");
+  DEBUG_PRINT(LittleFS.totalBytes() / 1024);
   DEBUG_PRINT_F(" KB, Free: ");
-  DEBUG_PRINT(FFat.freeBytes() / 1024);
+  DEBUG_PRINT((LittleFS.totalBytes() - LittleFS.usedBytes()) / 1024);
   DEBUG_PRINTLN_F(" KB");
 }
 
 void DataManager::dumpInternalFlash(int fileIndex) {
-  if (!_ffatAvailable) return;
+  if (!_littlefsAvailable) return;
   
   if (fileIndex == -1) {
     fileIndex = getLatestInternalLogIndex();
     if (fileIndex < 0) {
-      DEBUG_PRINTLN_F("FFAT: No logs found to dump.");
+      DEBUG_PRINTLN_F("STORAGE: No logs found to dump.");
       return;
     }
   }
@@ -632,9 +633,9 @@ void DataManager::dumpInternalFlash(int fileIndex) {
   char buf[32];
   snprintf(buf, sizeof(buf), "/log_%03d.bin", fileIndex);
   
-  File f = FFat.open(buf, FILE_READ);
+  File f = LittleFS.open(buf, FILE_READ);
   if (!f) {
-    DEBUG_PRINTLN_F("FFAT: File not found.");
+    DEBUG_PRINTLN_F("STORAGE: File not found.");
     return;
   }
 
@@ -673,25 +674,32 @@ void DataManager::dumpInternalFlash(int fileIndex) {
 }
 
 void DataManager::clearInternalFlash() {
-    DEBUG_PRINTLN_F("FFAT: Unmounting and formatting internal flash...");
-    _ffatAvailable = false;
+    DEBUG_PRINTLN_F("STORAGE: Unmounting and formatting internal flash...");
+    _littlefsAvailable = false;
     if (_internalLogFile) _internalLogFile.close();
-    FFat.end(); // Unmount to allow formatting
+    LittleFS.end(); // Unmount to allow formatting
     
-    if (FFat.format()) {
-        DEBUG_PRINTLN_F("FFAT: Format complete. Re-mounting...");
-        if (FFat.begin(false, "/ffat", 10, "ffat")) {
-            _ffatAvailable = true;
-            DEBUG_PRINTLN_F("FFAT: Ready.");
+    if (LittleFS.format()) {
+        DEBUG_PRINTLN_F("STORAGE: Format complete. Re-mounting...");
+        if (LittleFS.begin(false, "/littlefs", 10, "littlefs")) {
+            _littlefsAvailable = true;
+            DEBUG_PRINTLN_F("STORAGE: Ready.");
         } else {
-            DEBUG_PRINTLN_F("FFAT: Re-mount failed.");
+            DEBUG_PRINTLN_F("STORAGE: Re-mount failed.");
         }
     } else {
-        DEBUG_PRINTLN_F("FFAT: Format FAILED.");
+        DEBUG_PRINTLN_F("STORAGE: Format FAILED.");
     }
 }
 
-// --- HIL Simulation ---
+/**
+ * @brief Returns the index of the latest existing internal log.
+ * @return Latest index, or -1 if no logs exist.
+ */
+int DataManager::getLatestInternalLogIndex() const {
+  if (!_littlefsAvailable || _internalRecordCounter == 0) return -1;
+  return (int)_internalRecordCounter - 1;
+}
 
 /**
  * @brief Helper to detect CSV format based on column count (commas).
@@ -1505,14 +1513,6 @@ void DataManager::runStrategyBenchmark(uint32_t freq,u_int16_t numberOfRecords) 
       "------------------------------------------------------------------");
 }
 
-/**
- * @brief Returns the index of the latest existing internal log.
- * @return Latest index, or -1 if no logs exist.
- */
-int DataManager::getLatestInternalLogIndex() const {
-  if (!_ffatAvailable || _ffatRecordCounter == 0) return -1;
-  return (int)_ffatRecordCounter - 1;
-}
 
 // Benchmark the SD card
 // DataManager::getInstance().runFrequencyTest(16000000, 50, 1000, false);
