@@ -22,7 +22,7 @@ constexpr uint8_t PIN_SERVO               = 42;   // (JTAG Conflict)
 constexpr uint8_t PIN_SDA                 = 1;    // I2C Data
 constexpr uint8_t PIN_SCL                 = 2;    // I2C Clock
 
-// SDIO 4-bit Pins PCB
+// SDIO 4-bit Pins
 constexpr uint8_t PIN_SDIO_CLK            = 12;
 constexpr uint8_t PIN_SDIO_CMD            = 9;
 constexpr uint8_t PIN_SDIO_D0             = 13;
@@ -46,7 +46,6 @@ constexpr uint8_t PIN_FLASH_SCK           = 255;
 constexpr uint8_t PIN_FLASH_WP            = 255;
 constexpr uint8_t PIN_FLASH_HOLD          = 255;
 
-
 constexpr uint8_t I2C_ADDRESS_IMU         = 0x68;      // MPU9250 I2C address
 constexpr uint8_t I2C_ADDRESS_BARO        = 0x76;      // BMP280 I2C address
 
@@ -68,23 +67,50 @@ constexpr float Ts_ms                     = 20.0f;     // Control loop period [m
 constexpr float Ts                        = 0.020f;    // Control loop period [s]
 constexpr float apoggeTargetAltitude_m    = 3254.0f;   // Target mission apogee [m]
 constexpr float maxTiltAngle              = 60.0f;     // Max safety tilt for actuation [deg]
+constexpr float NET_ACC_THRESHOLD         = 0.2f;      // Vertical noise floor [m/s^2]
 constexpr uint32_t WDT_TIMEOUT_MS         = 5000;      // Watchdog timeout in milliseconds
 constexpr bool useRecovery                = false;     // Enable recovery sequence logic
-constexpr bool runBusScan                 = true;     // Run I2C bus scan at startup
+constexpr bool runBusScan                 = false;     // Run I2C bus scan at startup
 
 // --- IMU & Orientation ---
 constexpr bool PHYSICAL_Z_AXIS_DOWN       = true;      // IMU Mounting   : true: Z-Down | false: Z-Up
+constexpr bool USE_MAGNETOMETER           = true;      // Filter: Enable Mag for drift correction
+constexpr float MAGNETOMETER_FUSION_WEIGHT = 0.01f;    // Mag Authority
+constexpr float ATTITUDE_GYRO_CUTOFF_DPS  = 0.00f;     // Gyro Deadband: Ignore rotations < this value [dps]
+
 constexpr bool CALIBRATE_IMU_ON_STARTUP   = true;      // Run library calib ONLY if data is missing
 constexpr bool PRINT_IMU_PARAMS           = false;     // Print biases to Serial at boot
-constexpr bool PERFORM_FINE_TUNING        = true;      // Run iterative bias tweak on every boot
-constexpr bool ERASE_CALIB_ON_STARTUP     = false;     // Force delete all saved IMU data
-constexpr bool USE_MAGNETOMETER           = false;     // Filter: Enable Mag for drift correction
+constexpr bool PERFORM_FINE_TUNING        = false;     // Run iterative bias tweak on every boot
 constexpr bool FORCED_MAG_CALIBRATION     = false;     // Trigger the 30s visual spin routine
-constexpr float MAGNETOMETER_FUSION_WEIGHT = 0.01f;    // Mag Authority: Restored to 5% with corrected Axis Alignment
-constexpr float ATTITUDE_GYRO_CUTOFF_DPS  = 0.15f;     // Gyro Deadband: Ignore rotations < this value [dps]
+constexpr bool ERASE_CALIB_ON_STARTUP     = false;     // Force delete all saved IMU data
+constexpr float CALIBRATION_ACCEL_TOL_G   = 0.0025f;   // Iterative target for Accel [g]
+constexpr float CALIBRATION_GYRO_TOL_DPS  = 0.025f;    // Iterative target for Gyro [dps]
+constexpr int   CALIBRATION_MAX_ITERATIONS  = 30;      // Safety limit for iterative calibration
+
+// Acceleration magnitude window to trust gravity for orientation correction.
+constexpr float ORIENTATION_MASK_MIN_G     = 0.85f;     // TRUST accel only if > 0.85g
+constexpr float ORIENTATION_MASK_MAX_G     = 1.15f;     // TRUST accel only if < 1.15g
+
+namespace AttitudeFilter {
+    constexpr uint8_t NONE     = 0;
+    constexpr uint8_t MADGWICK = 1;
+    constexpr uint8_t MAHONY   = 2;
+    constexpr uint8_t EKF      = 3;
+    constexpr uint8_t MEKF     = 4;
+}
+constexpr uint8_t DEFAULT_ATTITUDE_FILTER = AttitudeFilter::MEKF;
+
+namespace MagLocation {
+    constexpr uint8_t CUSTOM        = 0;
+    constexpr uint8_t SAO_PAULO     = 1;
+    constexpr uint8_t PIRASSUNUNGA  = 2;
+    constexpr uint8_t MUNICH        = 3;
+    constexpr uint8_t MIDLAND_TX    = 4;
+}
+constexpr uint8_t DEFAULT_MAG_LOCATION = MagLocation::SAO_PAULO;
 
 // --- SD Card & Logging ---
-constexpr bool ENABLE_DATA_LOGGING        = true;      // Master switch for all logging
+constexpr bool ENABLE_DATA_LOGGING        = false;      // Master switch for all logging
 constexpr bool ENABLE_SD_LOGGING          = true;      // Toggle SD (CSV)
 constexpr bool ENABLE_INTERNAL_LOGGING    = true;      // Toggle Internal Flash (Binary)
 constexpr bool ENABLE_EXTERNAL_LOGGING    = false;     // Toggle External Flash (Reserved)
@@ -94,7 +120,7 @@ constexpr uint8_t TELEMETRY_LOGGING_DECIMATION = 5;    // Cycles between telemet
 constexpr char     SD_LOG_FOLDER[]        = "/REG_VOO"; 
 constexpr char     SD_LOG_BASENAME[]      = "VOO_";
 constexpr uint16_t SD_MAX_LOG_FILES       = 1000; 
-constexpr uint32_t SD_WRITE_TIMEOUT_MS    = 80;         // Max time allowed for single write [ms]
+constexpr uint32_t SD_WRITE_TIMEOUT_MS    = 100;        // Max time allowed for single write [ms]
 constexpr uint8_t  LOG_BUFFER_SIZE_SD     = 5;          // Records to buffer in RAM before SD write
 constexpr uint16_t LOG_BUFFER_SIZE_INT    = 15000;      // Binary records to buffer in PSRAM (~660KB)
 constexpr uint16_t LOG_PAD_FLUSH_SIZE     = 50;         // Pad Mode: Records to buffer before Flash write
@@ -105,12 +131,11 @@ constexpr uint16_t LOG_SYNC_INTERVAL_INT  = 15000;      // Sync Internal Flash
 // --- HIL (Hardware-In-the-Loop) ---
 constexpr bool HIL_MODE_ACTIVE            = false;       // Enable  sensor simulation
 constexpr char HIL_FILENAME[]             = "/Teste_HIL_Sensors_ZDown.csv";
-constexpr uint32_t HIL_STABILIZATION_MS   = 15000;      // Time to wait for estimator to settle [ms]
+constexpr uint32_t HIL_STABILIZATION_MS   = 15000;       // Time to wait for estimator to settle [ms]
 // HIL CSV axis convention: 
 // true  = Apply Z-Down compensation (Use this for Z-Up files like RocketPy native -1G)
 // false = Pass data raw (Use this for Z-Down files where accel_z is already +1G)
-constexpr bool HIL_Z_AXIS_DOWN            = true;      // Convention of the HIL CSV file
-
+constexpr bool HIL_Z_AXIS_DOWN            = true;        // Convention of the HIL CSV file
 
 // --- Servo Specs ---
 constexpr bool TESTE_SERVO                = false;      // Enable servo test
@@ -165,12 +190,6 @@ constexpr uint16_t LANDING_STABLE_TIME_MS            = 5000;   // Stability dura
 constexpr uint32_t LANDING_MAX_WAIT_TIME_MS          = 600000; // Ultimate timeout (10 min) [ms]
 
 // =========================================================================
-// ATTITUDE ESTIMATOR & FILTERING
-// =========================================================================
-constexpr float ORIENTATION_MASK_MIN_G     = 0.5f;     // Ignore accel below this (Free-fall/Coast)
-constexpr float ORIENTATION_MASK_MAX_G     = 16.0f;     // Ignore accel above this (Thrust/Vibration)
-
-// =========================================================================
 // SYSTEM HEALTH & DIAGNOSTICS
 // =========================================================================
 
@@ -179,16 +198,6 @@ constexpr float   HEALTH_ACCEL_MAG_TOLERANCE  = 0.15f; // Stationary 1g test tol
 constexpr float   HEALTH_GYRO_TOLERANCE_DPS   = 1.0f;  // Stationary drift tolerance [dps]
 constexpr float   HEALTH_ALT_TOLERANCE_M      = 4.0f;  // Baro variance tolerance at pad [m]
 constexpr float   HEALTH_VEL_TOLERANCE_MS     = 1.0f;  // Kalman velocity variance at pad [m/s]
-
-// =========================================================================
-// SENSOR & ALGORITHM THRESHOLDS
-// =========================================================================
-
-constexpr float ATTITUDE_NET_ACC_VIBRATION_THRESHOLD = 0.2f;   // Vertical noise floor [m/s^2]
-constexpr float CALIBRATION_ACCEL_TOL_G              = 0.0025f; // Iterative target for Accel [g]
-constexpr float CALIBRATION_GYRO_TOL_DPS             = 0.025f;  // Iterative target for Gyro [dps]
-constexpr int   CALIBRATION_MAX_ITERATIONS           = 30;      // Safety limit for iterative calibration
-
 
 // =========================================================================
 // DEBUG MACROS

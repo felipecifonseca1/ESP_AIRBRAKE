@@ -8,6 +8,15 @@
  * @param imu Pointer to an IMUSensor instance.
  */
 AttitudeEstimator::AttitudeEstimator(IMUSensor* imu) : _imu(imu) {
+    // Initialize MEKF with standard noise values
+    using namespace Eigen;
+    Matrix<float, 6, 6> Q = Matrix<float, 6, 6>::Identity() * 0.001f; // Process noise (Gyro/Bias drift)
+    Matrix<float, 6, 6> P0 = Matrix<float, 6, 6>::Identity() * 0.1f;    // Initial uncertainty
+    _mekf.init(Q, P0);
+
+    // Initialize Magnetic Reference based on config
+    setMagneticLocation(DEFAULT_MAG_LOCATION);
+
     resetOrientation(); 
 }
 
@@ -23,7 +32,7 @@ void AttitudeEstimator::update(float dt, bool ignoreAccel, bool physicalZAxisDow
     float ay = _imu->getAccY();
     float az = _imu->getAccZ();
     
-    // [TRANSFORM] If physicalZAxisDown is true, it means the sensor is mounted 
+    // If physicalZAxisDown is true, it means the sensor is mounted 
     // upside down relative to the rocket. We apply a 180-X flip to bring it 
     // into the internal Z-Up frame (+1G gravity) that the filter expects.
     if (physicalZAxisDown) {
@@ -50,16 +59,15 @@ void AttitudeEstimator::update(float dt, bool ignoreAccel, bool physicalZAxisDow
         gy_dps = -gy_dps; gz_dps = -gz_dps;
     }
 
-    // [DIAGNOSTIC] Store transformed gyro values
+    // Store transformed gyro values
     _transformedGyroX = gx_dps;
     _transformedGyroY = gy_dps;
     _transformedGyroZ = gz_dps;
 
-    // [FIX] Apply Gyro Cutoff (Deadband) to ignore stationary vibration/noise
-    float cutoff_dps = ATTITUDE_GYRO_CUTOFF_DPS; 
-    if (abs(gx_dps) < cutoff_dps) gx_dps = 0.0f;
-    if (abs(gy_dps) < cutoff_dps) gy_dps = 0.0f;
-    if (abs(gz_dps) < cutoff_dps) gz_dps = 0.0f;
+    // Apply Gyro Cutoff to ignore stationary vibration/noise
+    if (abs(gx_dps) < ATTITUDE_GYRO_CUTOFF_DPS) gx_dps = 0.0f;
+    if (abs(gy_dps) < ATTITUDE_GYRO_CUTOFF_DPS) gy_dps = 0.0f;
+    if (abs(gz_dps) < ATTITUDE_GYRO_CUTOFF_DPS) gz_dps = 0.0f;
     
     // Convert back to rad/s for the filter
     float gx = gx_dps * DEG_TO_RAD;
@@ -71,8 +79,7 @@ void AttitudeEstimator::update(float dt, bool ignoreAccel, bool physicalZAxisDow
     float mz = 0.0f;
 
     if (_useMagnetometer) {
-        // [AXIS ALIGNMENT FIX] 
-        // The MPU9250's internal AK8963 Magnetometer is physically rotated relative to the MPU6500 Accel/Gyro:
+        // The MPU9250's internal AK8963 Magnetometer is physically rotated relative to the MPU9250 Accel/Gyro:
         // AK8963_X aligns with MPU_Y, AK8963_Y aligns with MPU_X, AK8963_Z aligns with MPU_-Z.
         float rawMagX = _imu->getMagX(); 
         float rawMagY = _imu->getMagY(); 
@@ -92,17 +99,19 @@ void AttitudeEstimator::update(float dt, bool ignoreAccel, bool physicalZAxisDow
 
     switch (_filterSel) {
         case AttitudeFilterSel::MADGWICK:
-            // Always run 9-axis fusion if Mag is enabled.
-            updateMadgwick(ignoreAccel ? 0 : ax, ignoreAccel ? 0 : ay, ignoreAccel ? 0 : az, gx, gy, gz, mx, my, mz);
+            updateMadgwick(ax, ay, az, gx, gy, gz, mx, my, mz, ignoreAccel);
             break;
         case AttitudeFilterSel::MAHONY:
-            updateMahony(ignoreAccel ? 0 : ax, ignoreAccel ? 0 : ay, ignoreAccel ? 0 : az, gx, gy, gz, mx, my, mz);
+            updateMahony(ax, ay, az, gx, gy, gz, mx, my, mz, ignoreAccel);
+            break;
+        case AttitudeFilterSel::MEKF:
+            updateMEKF(ax, ay, az, gx, gy, gz, mx, my, mz, ignoreAccel);
             break;
         case AttitudeFilterSel::NONE:
             updateNone(ax, ay, az, gx, gy, gz);
             break;
         case AttitudeFilterSel::EKF:
-            // Placeholder: Not implemented
+            updateEKF(ax, ay, az, gx, gy, gz, mx, my, mz, ignoreAccel);
             break;
     }
 }
@@ -137,12 +146,19 @@ void AttitudeEstimator::setFilterBeta(float errorDegPerSec) {
  * @brief Resets the internal orientation quaternion.
  * @param physicalZAxisDown If true, starts flipped 180deg (Z pointing down).
  */
-void AttitudeEstimator::resetOrientation(bool unused) {
-    _q[0] = 1.0f; _q[1] = 0.0f; _q[2] = 0.0f; _q[3] = 0.0f;
+void AttitudeEstimator::resetOrientation(bool physicalZAxisDown) {
+    if (physicalZAxisDown) {
+        // Start with a 180 degree flip around X axis: q = [0, 1, 0, 0]
+        _q[0] = 0.0f; _q[1] = 1.0f; _q[2] = 0.0f; _q[3] = 0.0f;
+    } else {
+        // Standard identity: q = [1, 0, 0, 0]
+        _q[0] = 1.0f; _q[1] = 0.0f; _q[2] = 0.0f; _q[3] = 0.0f;
+    }
+    _mekf.resetState(physicalZAxisDown);
 }
 
 void AttitudeEstimator::resetEstimatorState() {
-    _q[0] = 1.0f; _q[1] = 0.0f; _q[2] = 0.0f; _q[3] = 0.0f;
+    resetOrientation(PHYSICAL_Z_AXIS_DOWN);
     _w_bx = 0.0f; _w_by = 0.0f; _w_bz = 0.0f;
     _ix = 0.0f; _iy = 0.0f; _iz = 0.0f;
 }
@@ -214,18 +230,19 @@ float AttitudeEstimator::getTilt(bool unused) const {
 float AttitudeEstimator::getNetVerticalAcceleration(bool isZDown) const {
     float qw = _q[0]; float qx = _q[1]; float qy = _q[2]; float qz = _q[3];
 
-    // Project the ALREADY TRANSFORMED body acceleration into the world frame.
-    // _transformedAccX/Y/Z are updated in update() and already account for mount orientation.
+
     float worldZAcceleration =
         2.0f * (qx * qz - qw * qy) * _transformedAccX +
         2.0f * (qw * qx + qy * qz) * _transformedAccY +
         (qw * qw - qx * qx - qy * qy + qz * qz) * _transformedAccZ;
 
-    // the Z-Up transformation in update() already handles the mounting.
-    // worldZ should be ~ +1.0G on the pad regardless of PHYSICAL_Z_AXIS_DOWN.
     float netG = (worldZAcceleration - 1.0f);
-
-    return netG * _G_GRAVITY;
+    float netAcc = netG * _G_GRAVITY;
+    
+    // Apply noise floor (threshold) to keep pad telemetry clean
+    if (abs(netAcc) < NET_ACC_THRESHOLD) return 0.0f;
+    
+    return netAcc;
 }
 
 /**
@@ -246,7 +263,7 @@ void AttitudeEstimator::updateNone(float ax, float ay, float az, float gx, float
  * @brief Madgwick orientation filter implementation.
  * @details Ported from the original MPU9250 package. Supports magnetometer if valid.
  */
-void AttitudeEstimator::updateMadgwick(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz) {
+void AttitudeEstimator::updateMadgwick(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz, bool ignoreAccel) {
     double q0 = _q[0], q1 = _q[1], q2 = _q[2], q3 = _q[3];
     double recipNorm;
     double s0, s1, s2, s3;
@@ -254,10 +271,13 @@ void AttitudeEstimator::updateMadgwick(float ax, float ay, float az, float gx, f
     double hx, hy;
     double _2q0mx, _2q0my, _2q0mz, _2q1mx, _2bx, _2bz, _4bx, _4bz, _2q0, _2q1, _2q2, _2q3, _2q0q2, _2q2q3, q0q0, q0q1, q0q2, q0q3, q1q1, q1q2, q1q3, q2q2, q2q3, q3q3;
 
+    if (ignoreAccel) { ax = 0; ay = 0; az = 0; }
+
     qDot1 = 0.5f * (-q1 * gx - q2 * gy - q3 * gz);
     qDot2 = 0.5f * (q0 * gx + q2 * gz - q3 * gy);
     qDot3 = 0.5f * (q0 * gy - q1 * gz + q3 * gx);
     qDot4 = 0.5f * (q0 * gz + q1 * gy - q2 * gx);
+
 
     double a_norm_sq = ax * ax + ay * ay + az * az;
     double m_norm_sq = mx * mx + my * my + mz * mz;
@@ -334,7 +354,8 @@ void AttitudeEstimator::updateMadgwick(float ax, float ay, float az, float gx, f
  * @brief Mahony orientation filter implementation.
  * @details Uses a Proportional-Integral feedback loop to correct gyroscope drift using accel/mag.
  */
-void AttitudeEstimator::updateMahony(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz) {
+void AttitudeEstimator::updateMahony(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz, bool ignoreAccel) {
+    if (ignoreAccel) { ax = 0; ay = 0; az = 0; }
     float recipNorm;
     float vx, vy, vz;
     float ex, ey, ez;  
@@ -398,8 +419,86 @@ void AttitudeEstimator::updateMahony(float ax, float ay, float az, float gx, flo
 /**
  * @brief Placeholder for EKF (Extended Kalman Filter) update.
  */
-void AttitudeEstimator::updateEKF(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz) {
-    // TODO: Implement EKF update
+void AttitudeEstimator::updateEKF(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz, bool ignoreAccel) {
+    // TODO: Implement standard additive EKF for comparison with MEKF
+}
+
+/**
+ * @brief MEKF update: runs the predict + sequential measurement update via the MEKF class.
+ * @details Call order: predict (gyro) → accel update → mag update (if enabled).
+ *          Results are written back into the shared _q quaternion array.
+ */
+void AttitudeEstimator::updateMEKF(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz, bool ignoreAccel) {
+    using Vec3 = Eigen::Matrix<float, 3, 1>;
+    using Mat3 = Eigen::Matrix<float, 3, 3>;
+    using Vec4 = Eigen::Matrix<float, 4, 1>;
+
+    // --- 1. Predict ---
+    Vec3 gyro(gx, gy, gz);
+    _mekf.predict(gyro, _deltaT);
+
+    // --- 2. Accelerometer update ---
+    // Reference: gravity vector in Earth frame (Z-Up convention: +Z points skyward)
+    if (!ignoreAccel) {
+        Vec3 accel(ax, ay, az);
+        Vec3 ref_gravity(0.0f, 0.0f, 1.0f);
+        Mat3 R_accel = Mat3::Identity() * _mekf_r_accel; // Use dynamic tuning
+        _mekf.updateMeasurement(accel, ref_gravity, R_accel);
+    }
+
+    // --- 3. Magnetometer update ---
+    if (_useMagnetometer) {
+        Vec3 mag(mx, my, mz);
+        // Reference: local magnetic field direction in Earth frame.
+        Vec3 ref_mag(_mag_ref_x, _mag_ref_y, _mag_ref_z);
+        
+        // Use the decoupled 1D Yaw update to prevent mag inclination from biasing tilt.
+        // We pass the scalar variance mekf_r_mag.
+        _mekf.updateMagnetometerYaw(mag, ref_mag, _mekf_r_mag);
+    }
+    // --- 4. Write quaternion back to shared _q array ---
+    Vec4 result_q = _mekf.getQuaternion();
+    _q[0] = result_q(0); // w
+    _q[1] = result_q(1); // x
+    _q[2] = result_q(2); // y
+    _q[3] = result_q(3); // z
+}
+
+void AttitudeEstimator::setMEKFTuning(float q_proc, float r_accel, float r_mag) {
+    _mekf_q_proc = q_proc;
+    _mekf_r_accel = r_accel;
+    _mekf_r_mag = r_mag;
+    _mekf.setProcessNoise(q_proc);
+}
+
+void AttitudeEstimator::setMagneticReference(float mx, float my, float mz) {
+    float norm = sqrt(mx*mx + my*my + mz*mz);
+    if (norm > 1e-6f) {
+        _mag_ref_x = mx / norm;
+        _mag_ref_y = my / norm;
+        _mag_ref_z = mz / norm;
+    }
+}
+
+void AttitudeEstimator::setMagneticLocation(uint8_t location) {
+    switch(location) {
+        case MagLocation::SAO_PAULO:
+            setMagneticReference(0.724f, -0.289f, 0.626f); // Declination: -21.76° | Inclination: 38.77°
+            break;
+        case MagLocation::PIRASSUNUNGA:
+            setMagneticReference(0.730f, -0.283f, 0.622f); // Declination: -21.22° | Inclination: 38.48°
+            break;
+        case MagLocation::MUNICH:
+            setMagneticReference(0.418f, 0.014f, -0.908f); // Declination: 1.94° | Inclination: 65.26°
+            break;
+        case MagLocation::MIDLAND_TX:
+            setMagneticReference(0.497f, 0.056f, -0.866f); // Declination: 6.43° | Inclination: 59.99°
+            break;
+        default:
+            // Default to horizontal North if unknown
+            setMagneticReference(1.0f, 0.0f, 0.0f);
+            break;
+    }
 }
 
 void AttitudeEstimator::setMagnetometerWeight(float weight) {

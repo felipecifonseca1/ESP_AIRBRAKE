@@ -65,6 +65,20 @@ FlightController::FlightController(BarometricSensor *b,
  */
 void FlightController::setupController() {
   _controller.setLimits(0, 1);
+
+  // Apply default filter selection from config
+  AttitudeFilterSel selected = static_cast<AttitudeFilterSel>(DEFAULT_ATTITUDE_FILTER);
+  _attitudeEstimator->selectFilter(selected);
+
+  DEBUG_PRINT_F("FlightLogic: Attitude Filter -> ");
+  switch (selected) {
+    case AttitudeFilterSel::NONE:     DEBUG_PRINTLN_F("NONE"); break;
+    case AttitudeFilterSel::MADGWICK: DEBUG_PRINTLN_F("MADGWICK"); break;
+    case AttitudeFilterSel::MAHONY:   DEBUG_PRINTLN_F("MAHONY"); break;
+    case AttitudeFilterSel::EKF:      DEBUG_PRINTLN_F("EKF (FUTURE)"); break;
+    case AttitudeFilterSel::MEKF:     DEBUG_PRINTLN_F("MEKF"); break;
+  }
+
   DEBUG_PRINTLN_F("Controller initialized.");
 }
 
@@ -148,8 +162,6 @@ bool FlightController::runStateEstimator() {
 
       // In HIL mode the sensor convention comes from the CSV file (HIL_Z_AXIS_DOWN),
       // which may differ from the physical hardware mount (PHYSICAL_Z_AXIS_DOWN).
-      // Both update() and getNetVerticalAcceleration() must use the same effective flag
-      // so the filter quaternion and the AccVert projection are in the same frame.
       constexpr bool effectiveZDown = HIL_Z_AXIS_DOWN;
 
       // Assign sim-time to data row for correct log playback
@@ -192,10 +204,8 @@ bool FlightController::runStateEstimator() {
 
     // If the sensor is mounted Z-Down, we should transform it into a virtual
     // Z-Up frame so the filter math remains standard and numerically stable.
-    // The AttitudeEstimator::update function handles the Z-Down transformation
-    // internally based on the PHYSICAL_Z_AXIS_DOWN parameter.
 
-    // [FLIGHT MODE BETA] Set beta based on flight phase if not on pad
+    // Set beta based on flight phase if not on pad
     if (_flightState == FlightState::MOTOR_ON) {
         _attitudeEstimator->setFilterBeta(0.1f); // Smooth during thrust
     }
@@ -204,8 +214,7 @@ bool FlightController::runStateEstimator() {
     _diagnostics.imuFilter_us = micros() - step_us;
 
     step_us = micros();
-    _netVerticalAcceleration =
-        _attitudeEstimator->getNetVerticalAcceleration(PHYSICAL_Z_AXIS_DOWN);
+    _netVerticalAcceleration = _attitudeEstimator->getNetVerticalAcceleration(PHYSICAL_Z_AXIS_DOWN);
     _tilt = _attitudeEstimator->getTilt(PHYSICAL_Z_AXIS_DOWN);
     _diagnostics.navCalc_us = micros() - step_us;
   }

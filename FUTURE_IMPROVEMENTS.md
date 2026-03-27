@@ -4,8 +4,8 @@ This document tracks planned features, enhancements, and technical debt for the 
 
 ## Planned Improvements
 
-- [ ] **State Estimation (EKF)**: 
-    - Implement an **Extended Kalman Filter (EKF)** or Unscented Kalman Filter (UKF) to replace the current basic IMU/Baro fusion.
+- [ ] **State Estimation (EKF and MEKF)**: 
+    - Implement an **Extended Kalman Filter (EKF)** or Multiplicative Extended Kalman Filter (MEKF) to replace the current basic IMU/Baro fusion.
     - Improve handling of nonlinear dynamics (e.g., orientation tracking during high-G acceleration and airbrake deployment).
 - [ ] **Enhanced HIL Simulation**: 
     - Improve Hardware-in-the-Loop (HIL) simulation accuracy.
@@ -20,5 +20,5 @@ This document tracks planned features, enhancements, and technical debt for the 
 - [ ] **Elite Logging Optimizations**:
     - **SD Card Pre-allocation**: Implement contiguous file pre-allocation to eliminate FAT32 fragmentation stalls during high-speed writes.
     - **Full Binary SD Logging**: Move from CSV to 100% binary logging on SD to eliminate `printf` overhead and fixed-width formatting.
-    - **CRC-16/32 Integrity**: Add checksums to every record to ensure zero data corruption during high-vibration flight phases.
-    - **Static DMA Buffers**: Replace `String` buffers with 4-byte aligned static memory arrays to maximize the efficiency of the ESP32-S3's SDIO-DMA engine.
+    - **3rd State in KF (Acceleration bias)**: Add acceleration bias to the state estimation.
+   

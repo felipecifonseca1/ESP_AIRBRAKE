@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "IMUSensor.h"
+#include "MEKF.h"
 
 /**
  * @enum AttitudeFilterSel
@@ -13,6 +14,7 @@ enum class AttitudeFilterSel {
     MADGWICK, ///< optimized gradient descent filter
     MAHONY,   ///< Proportional-Integral feedback filter
     EKF,      ///< Extended Kalman Filter (Reserved for future)
+    MEKF,     ///< Multiplicative Extended Kalman Filter
 };
 
 /**
@@ -60,7 +62,7 @@ class AttitudeEstimator {
         * @brief Resets the internal orientation quaternion and clears drift biases.
         * @param physicalZAxisDown If true, starts flipped 180deg (Z pointing down).
         */
-        void resetOrientation(bool unused = false);
+        void resetOrientation(bool physicalZAxisDown = false);
 
         /**
          * @brief Resets the estimator state, including drift biases and integral terms.
@@ -121,6 +123,26 @@ class AttitudeEstimator {
         */
         IMUSensor* getIMU() const { return _imu; }
 
+        /**
+         * @brief Updates the noise parameters for the MEKF.
+         * @param q_proc   Process noise (gyro drift). Lower is smoother.
+         * @param r_accel  Accelerometer measurement noise. Higher trusts gyro more.
+         * @param r_mag    Magnetometer measurement noise. Higher ignores magnetic jitter.
+         */
+        void setMEKFTuning(float q_proc, float r_accel, float r_mag);
+
+        /**
+         * @brief Sets the magnetic reference vector directly.
+         * @param mx, my, mz Components of the local magnetic field in the World Frame (will be normalized).
+         */
+        void setMagneticReference(float mx, float my, float mz);
+
+        /**
+         * @brief Sets the magnetic reference based on a location preset.
+         * @param location Index from MagLocation namespace (SAO_PAULO, MUNICH, etc.).
+         */
+        void setMagneticLocation(uint8_t location);
+
     private:
         IMUSensor* _imu;
         bool _useMagnetometer = true;
@@ -130,13 +152,23 @@ class AttitudeEstimator {
         // Filter Settings
         AttitudeFilterSel _filterSel = AttitudeFilterSel::MADGWICK;
         float _deltaT = 0.0f;
-        float _magWeight = 0.05f; // Initial weight for magnetometer authority 
+
+        // MEKF Tuning
+        float _mekf_q_proc = 0.001f;
+        float _mekf_r_accel = 0.1f;
+        float _mekf_r_mag = 5.0f;
+
+        // Magnetic Reference (World Frame)
+        float _mag_ref_x = 1.0f; 
+        float _mag_ref_y = 0.0f;
+        float _mag_ref_z = 0.0f;
 
         // Madgwick parameters
         float _beta = sqrt(3.0f / 4.0f) * (PI * (1.0f / 180.0f)); 
         float _zeta = sqrt(3.0f / 4.0f) * (PI * (1.0f / 180.0f));
         bool _useZeta = false;
         float _w_bx = 0.0f, _w_by = 0.0f, _w_bz = 0.0f;
+        float _magWeight = 0.05f; // Initial weight for magnetometer authority 
 
         // Mahony parameters
         float _Kp = 30.0f;
@@ -147,10 +179,13 @@ class AttitudeEstimator {
         static constexpr float _G_GRAVITY = 9.80665f;
 
         // Internal Math Functions
-        void updateMadgwick(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz);
-        void updateMahony(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz);
-        void updateEKF(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz);
+        void updateMadgwick(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz, bool ignoreAccel);
+        void updateMahony(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz, bool ignoreAccel);
+        void updateEKF(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz, bool ignoreAccel);
+        void updateMEKF(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz, bool ignoreAccel);
         void updateNone(float ax, float ay, float az, float gx, float gy, float gz);
+
+        MEKF _mekf; ///< MEKF filter instance
         
         float computeRoll() const;
         float computePitch() const;

@@ -133,9 +133,15 @@ void MPU9250_HAL::calibrateMagVisual() {
     // [CHECK] Verify Magnetometer is actually there
     Wire.beginTransmission(0x0C); // AK8963 Address
     Wire.write(0x00); // WHO_AM_I
-    Wire.endTransmission(false);
-    Wire.requestFrom(0x0C, (uint8_t)1);
-    uint8_t magId = Wire.available() ? Wire.read() : 0xFF;
+    uint8_t err = Wire.endTransmission(false);
+    
+    uint8_t magId = 0xFF;
+    if (err == 0) {
+        Wire.requestFrom(0x0C, (uint8_t)1);
+        magId = Wire.available() ? Wire.read() : 0xFF;
+    } else {
+        DEBUG_PRINTF("I2C ERROR AK8963 Bypass Check: %d\n", err);
+    }
     
     DEBUG_PRINT_F("AK8963 WHO_AM_I: 0x"); DEBUG_PRINTLN(magId, HEX);
     
