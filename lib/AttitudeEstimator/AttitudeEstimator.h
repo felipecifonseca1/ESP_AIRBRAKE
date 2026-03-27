@@ -35,7 +35,7 @@ class AttitudeEstimator {
         * @param dt Delta time since the last update in seconds.
         * @param ignoreAccel If true, the accelerometer correction is skipped (Gyro-only integration).
         */
-        void update(float dt, bool ignoreAccel = false);
+        void update(float dt, bool ignoreAccel = false, bool physicalZAxisDown = false);
 
         // --- Configuration Getters & Setters ---
         /**
@@ -57,15 +57,21 @@ class AttitudeEstimator {
         void setFilterBeta(float errorDegPerSec);
 
         /**
-        * @brief Resets the internal orientation quaternion.
+        * @brief Resets the internal orientation quaternion and clears drift biases.
         * @param physicalZAxisDown If true, starts flipped 180deg (Z pointing down).
         */
-        void resetOrientation(bool physicalZAxisDown);
+        void resetOrientation(bool unused = false);
+
+        /**
+         * @brief Resets the estimator state, including drift biases and integral terms.
+         */
+        void resetEstimatorState();
 
         // --- Orientation Getters ---
         float getRoll() const;  ///< Returns Roll in degrees [-180, 180]
         float getPitch() const; ///< Returns Pitch in degrees [-90, 90]
         float getYaw() const;   ///< Returns Yaw in degrees [-180, 180]
+        float getBeta() const { return _beta; } ///< Diagnostic tracer
         
         // Quaternion Getters
         float getQuaternionW() const { return _q[0]; } ///< Returns W component of quaternion
@@ -79,14 +85,37 @@ class AttitudeEstimator {
         * @param physicalZAxisDown True if the IMU's Z-axis points towards the ground when upright.
         * @return Tilt angle in degrees [0° to 180°].
         */
-        float getTilt(bool physicalZAxisDown) const;
+        float getTilt(bool unused = false) const;
 
         /**
-        * @brief Calculates the net vertical acceleration in the Earth frame.
-        * @return Net vertical acceleration in m/s^2 (excluding gravity).
+        * @brief Computes Z-axis acceleration in the Earth frame, with gravity removed.
+        * @param isZDown True if the sensor is physically mounted Z-Down (subtracts -1G gravity instead of +1G).
+        * @return Vertical acceleration in m/s^2.
         */
-        float getNetVerticalAcceleration() const;
+        float getNetVerticalAcceleration(bool isZDown = false) const;
 
+        /**
+         * @brief Returns the transformed Z-acceleration entering the filter (diagnostic).
+         */
+        float getTransformedAccX() const { return _transformedAccX; }
+        float getTransformedAccY() const { return _transformedAccY; }
+        float getTransformedAccZ() const { return _transformedAccZ; }
+        
+        float getTransformedGyroX() const { return _transformedGyroX; }
+        float getTransformedGyroY() const { return _transformedGyroY; }
+        float getTransformedGyroZ() const { return _transformedGyroZ; }
+
+        /**
+         * @brief Enable or disable magnetometer fusion.
+         * @param use True to enable.
+         */
+        void setUseMagnetometer(bool use);
+
+        /**
+        * @brief Adjusts the authority of the magnetometer in the fusion filter.
+        * @param weight [0.0 to 1.0] A lower value (e.g., 0.05) prevents tilt oscillation.
+        */
+        void setMagnetometerWeight(float weight);
         /**
         * @brief Returns the underlying IMU sensor logic
         */
@@ -94,13 +123,14 @@ class AttitudeEstimator {
 
     private:
         IMUSensor* _imu;
-
-        // Quaternions: [qW, qX, qY, qZ]
-        float _q[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+        bool _useMagnetometer = true;
+        
+        volatile float _q[4] = {1.0f, 0.0f, 0.0f, 0.0f}; // Internal Quaternion [w, x, y, z]
 
         // Filter Settings
         AttitudeFilterSel _filterSel = AttitudeFilterSel::MADGWICK;
         float _deltaT = 0.0f;
+        float _magWeight = 0.05f; // Initial weight for magnetometer authority 
 
         // Madgwick parameters
         float _beta = sqrt(3.0f / 4.0f) * (PI * (1.0f / 180.0f)); 
@@ -125,6 +155,14 @@ class AttitudeEstimator {
         float computeRoll() const;
         float computePitch() const;
         float computeYaw() const;
+
+        float _transformedAccX = 0.0f;
+        float _transformedAccY = 0.0f;
+        float _transformedAccZ = 0.0f;
+
+        float _transformedGyroX = 0.0f;
+        float _transformedGyroY = 0.0f;
+        float _transformedGyroZ = 0.0f;
 };
 
 #endif // ATTITUDE_ESTIMATOR_H

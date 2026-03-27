@@ -1,20 +1,21 @@
 #include "AttitudeEstimator.h"
 #include "Config_voo.h"
 #include <math.h>
+#include "MPU9250_HAL.h"
 
 /**
  * @brief Initialize the estimator with an IMU pointer.
  * @param imu Pointer to an IMUSensor instance.
  */
 AttitudeEstimator::AttitudeEstimator(IMUSensor* imu) : _imu(imu) {
-    resetOrientation(PHYSICAL_Z_AXIS_DOWN); 
+    resetOrientation(); 
 }
 
 /**
  * @brief Main update loop. Pulls raw data from IMU and updates the active filter.
  * @param dt Time delta in seconds.
  */
-void AttitudeEstimator::update(float dt, bool ignoreAccel) {
+void AttitudeEstimator::update(float dt, bool ignoreAccel, bool physicalZAxisDown) {
     if (!_imu) return; 
     _deltaT = dt;
 
@@ -22,22 +23,76 @@ void AttitudeEstimator::update(float dt, bool ignoreAccel) {
     float ay = _imu->getAccY();
     float az = _imu->getAccZ();
     
+    // [TRANSFORM] If physicalZAxisDown is true, it means the sensor is mounted 
+    // upside down relative to the rocket. We apply a 180-X flip to bring it 
+    // into the internal Z-Up frame (+1G gravity) that the filter expects.
+    if (physicalZAxisDown) {
+        // Rotation of 180 degrees around X: [x, -y, -z]
+        ay = -ay; az = -az;
+    }
+
+    _transformedAccX = ax;
+    _transformedAccY = ay;
+    _transformedAccZ = az;
+
     // Automatic Accel Masking: Ignore if beyond thresholds
     float a_norm = sqrt(ax * ax + ay * ay + az * az);
     if (a_norm > ORIENTATION_MASK_MAX_G || a_norm < ORIENTATION_MASK_MIN_G) {
         ignoreAccel = true;
     }
 
-    float gx = _imu->getGyroX_rads();
-    float gy = _imu->getGyroY_rads();
-    float gz = _imu->getGyroZ_rads();
+    float gx_dps = _imu->getGyroX_rads() * RAD_TO_DEG;
+    float gy_dps = _imu->getGyroY_rads() * RAD_TO_DEG;
+    float gz_dps = _imu->getGyroZ_rads() * RAD_TO_DEG;
+
+    if (physicalZAxisDown) {
+        // Rotation of 180 degrees around X: [x, -y, -z]
+        gy_dps = -gy_dps; gz_dps = -gz_dps;
+    }
+
+    // [DIAGNOSTIC] Store transformed gyro values
+    _transformedGyroX = gx_dps;
+    _transformedGyroY = gy_dps;
+    _transformedGyroZ = gz_dps;
+
+    // [FIX] Apply Gyro Cutoff (Deadband) to ignore stationary vibration/noise
+    float cutoff_dps = ATTITUDE_GYRO_CUTOFF_DPS; 
+    if (abs(gx_dps) < cutoff_dps) gx_dps = 0.0f;
+    if (abs(gy_dps) < cutoff_dps) gy_dps = 0.0f;
+    if (abs(gz_dps) < cutoff_dps) gz_dps = 0.0f;
     
-    float mx = _imu->getMagX();
-    float my = _imu->getMagY();
-    float mz = _imu->getMagZ();
+    // Convert back to rad/s for the filter
+    float gx = gx_dps * DEG_TO_RAD;
+    float gy = gy_dps * DEG_TO_RAD;
+    float gz = gz_dps * DEG_TO_RAD;
+
+    float mx = 0.0f;
+    float my = 0.0f;
+    float mz = 0.0f;
+
+    if (_useMagnetometer) {
+        // [AXIS ALIGNMENT FIX] 
+        // The MPU9250's internal AK8963 Magnetometer is physically rotated relative to the MPU6500 Accel/Gyro:
+        // AK8963_X aligns with MPU_Y, AK8963_Y aligns with MPU_X, AK8963_Z aligns with MPU_-Z.
+        float rawMagX = _imu->getMagX(); 
+        float rawMagY = _imu->getMagY(); 
+        float rawMagZ = _imu->getMagZ(); 
+
+        mx = rawMagY;   // Align Mag Y to Accel X (Right)
+        my = rawMagX;   // Align Mag X to Accel Y (Forward)
+        mz = rawMagZ;   // Already flipped in HAL to be Up-positive
+
+        if (physicalZAxisDown) {
+            // Rotation of 180 degrees around X: [x, -y, -z]
+            my = -my; mz = -mz;
+        }
+    }
+
+    MPU9250_HAL* mpuHal = (MPU9250_HAL*)_imu;
 
     switch (_filterSel) {
         case AttitudeFilterSel::MADGWICK:
+            // Always run 9-axis fusion if Mag is enabled.
             updateMadgwick(ignoreAccel ? 0 : ax, ignoreAccel ? 0 : ay, ignoreAccel ? 0 : az, gx, gy, gz, mx, my, mz);
             break;
         case AttitudeFilterSel::MAHONY:
@@ -75,27 +130,19 @@ void AttitudeEstimator::setDriftLearning(bool enabled) {
 void AttitudeEstimator::setFilterBeta(float errorDegPerSec) {
     float gyroErr = PI * (errorDegPerSec / 180.0f);
     _beta = sqrt(3.0f / 4.0f) * gyroErr;
+    _zeta = _beta; // [FIX] Synchronize Integral Gain to proportional bounds to prevent Windup
 }
 
 /**
  * @brief Resets the internal orientation quaternion.
  * @param physicalZAxisDown If true, starts flipped 180deg (Z pointing down).
  */
-void AttitudeEstimator::resetOrientation(bool physicalZAxisDown) {
-    // Check if the sensor is mounted upside down 
-    if (physicalZAxisDown) { 
-        _q[0] = 0.0f; // qW
-        _q[1] = 0.0f; // qX
-        _q[2] = 1.0f; // qY = 1.0 flips it 180 degrees over the Y axis
-        _q[3] = 0.0f; // qZ
-    } else {
-        _q[0] = 1.0f; 
-        _q[1] = 0.0f; 
-        _q[2] = 0.0f; 
-        _q[3] = 0.0f; 
-    }
-    
-    // Reset drift accumulators
+void AttitudeEstimator::resetOrientation(bool unused) {
+    _q[0] = 1.0f; _q[1] = 0.0f; _q[2] = 0.0f; _q[3] = 0.0f;
+}
+
+void AttitudeEstimator::resetEstimatorState() {
+    _q[0] = 1.0f; _q[1] = 0.0f; _q[2] = 0.0f; _q[3] = 0.0f;
     _w_bx = 0.0f; _w_by = 0.0f; _w_bz = 0.0f;
     _ix = 0.0f; _iy = 0.0f; _iz = 0.0f;
 }
@@ -143,23 +190,19 @@ float AttitudeEstimator::computeYaw() const {
  * @param physicalZAxisDown True if the IMU is mounted Z-axis pointing down.
  * @return Tilt angle in degrees [0-180].
  */
-float AttitudeEstimator::getTilt(bool physicalZAxisDown) const {
+float AttitudeEstimator::getTilt(bool unused) const {
+    float qw = _q[0];
     float qx = _q[1];
     float qy = _q[2];
+    float qz = _q[3];
 
-    float cos_theta = 1.0f - 2.0f * (qx * qx + qy * qy);
-
-    if (cos_theta > 1.0f) cos_theta = 1.0f;
-    else if (cos_theta < -1.0f) cos_theta = -1.0f;
-
-    float tilt_rad = acosf(cos_theta);
-    float tilt_deg = tilt_rad * RAD_TO_DEG;
-
-    if (physicalZAxisDown) {
-        tilt_deg = (180.0f - tilt_deg);
-    }
+    // Standard Z-Up "upward" vector projected into body: [2(q1q3 - q0q2), 2(q0q1 + q2q3), q0^2 - q1^2 - q2^2 + q3^2]
+    // The Z-component is cos(tilt).
+    float cos_tilt = qw * qw - qx * qx - qy * qy + qz * qz;
+    if (cos_tilt > 1.0f) cos_tilt = 1.0f;
+    else if (cos_tilt < -1.0f) cos_tilt = -1.0f;
     
-    return tilt_deg;
+    return acosf(cos_tilt) * RAD_TO_DEG;
 }
 
 /**
@@ -168,35 +211,21 @@ float AttitudeEstimator::getTilt(bool physicalZAxisDown) const {
  *          to the world frame. Note: On pad, this should be close to 0.0.
  * @return Vertical acceleration in m/s^2.
  */
-float AttitudeEstimator::getNetVerticalAcceleration() const {
-    float qw = _q[0];
-    float qx = _q[1];
-    float qy = _q[2];
-    float qz = _q[3];
+float AttitudeEstimator::getNetVerticalAcceleration(bool isZDown) const {
+    float qw = _q[0]; float qx = _q[1]; float qy = _q[2]; float qz = _q[3];
 
-    float ax_g = _imu->getAccX();
-    float ay_g = _imu->getAccY();
-    float az_g = _imu->getAccZ();
+    // Project the ALREADY TRANSFORMED body acceleration into the world frame.
+    // _transformedAccX/Y/Z are updated in update() and already account for mount orientation.
+    float worldZAcceleration =
+        2.0f * (qx * qz - qw * qy) * _transformedAccX +
+        2.0f * (qw * qx + qy * qz) * _transformedAccY +
+        (qw * qw - qx * qx - qy * qy + qz * qz) * _transformedAccZ;
 
-    float qxqz = qx * qz;
-    float qwqy = qw * qy;
-    float qyqz = qy * qz;
-    float qwqx = qw * qx;
-    float qx2  = qx * qx;
-    float qy2  = qy * qy;
+    // the Z-Up transformation in update() already handles the mounting.
+    // worldZ should be ~ +1.0G on the pad regardless of PHYSICAL_Z_AXIS_DOWN.
+    float netG = (worldZAcceleration - 1.0f);
 
-    float worldZAcceleration = 
-        (2.0f * (qxqz - qwqy)) * ax_g +
-        (2.0f * (qyqz + qwqx)) * ay_g +
-        (1.0f - 2.0f * (qx2 + qy2)) * az_g;
-
-    float netVerticalAcceleration_ms2 = -(worldZAcceleration - 1.0f) * _G_GRAVITY;
-    
-    if (abs(netVerticalAcceleration_ms2) < ATTITUDE_NET_ACC_VIBRATION_THRESHOLD) { 
-        netVerticalAcceleration_ms2 = 0.0f;
-    }
-
-    return netVerticalAcceleration_ms2;
+    return netG * _G_GRAVITY;
 }
 
 /**
@@ -266,10 +295,10 @@ void AttitudeEstimator::updateMadgwick(float ax, float ay, float az, float gx, f
         _2bz = -_2q0mx * q2 + _2q0my * q1 + mz * q0q0 + _2q1mx * q3 - mz * q1q1 + _2q2 * my * q3 - mz * q2q2 + mz * q3q3;
         _4bx = 2.0f * _2bx; _4bz = 2.0f * _2bz;
 
-        s0 += -_2bz * q2 * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (-_2bx * q3 + _2bz * q1) * (_2bx * (q1q2 - q0q3) + _2bz * (q0q1 + q2q3) - my) + _2bx * q2 * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz);
-        s1 += _2bz * q3 * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (_2bx * q2 + _2bz * q0) * (_2bx * (q1q2 - q0q3) + _2bz * (q0q1 + q2q3) - my) + (_2bx * q3 - _4bz * q1) * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz);
-        s2 += (-_4bx * q2 - _2bz * q0) * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (_2bx * q1 + _2bz * q3) * (_2bx * (q1q2 - q0q3) + _2bz * (0.5f - q1q1 - q2q2) - my) + (_2bx * q0 - _4bz * q2) * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz);
-        s3 += (-_4bx * q3 + _2bz * q1) * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (-_2bx * q0 + _2bz * q2) * (_2bx * (q1q2 - q0q3) + _2bz * (q0q1 + q2q3) - my) + _2bx * q1 * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz);
+        s0 += _magWeight * (-_2bz * q2 * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (-_2bx * q3 + _2bz * q1) * (_2bx * (q1q2 - q0q3) + _2bz * (0.5f - q1q1 - q2q2) - my) + _2bx * q2 * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz));
+        s1 += _magWeight * (_2bz * q3 * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (_2bx * q2 + _2bz * q0) * (_2bx * (q1q2 - q0q3) + _2bz * (q0q1 + q2q3) - my) + (_2bx * q3 - _4bz * q1) * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz));
+        s2 += _magWeight * ((-_4bx * q2 - _2bz * q0) * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (_2bx * q1 + _2bz * q3) * (_2bx * (q1q2 - q0q3) + _2bz * (0.5f - q1q1 - q2q2) - my) + (_2bx * q0 - _4bz * q2) * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz));
+        s3 += _magWeight * ((-_4bx * q3 + _2bz * q1) * (_2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx) + (-_2bx * q0 + _2bz * q2) * (_2bx * (q1q2 - q0q3) + _2bz * (0.5f - q1q1 - q2q2) - my) + _2bx * q1 * (_2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz));
     }
 
     double s_norm_sq = s0 * s0 + s1 * s1 + s2 * s2 + s3 * s3;
@@ -339,7 +368,9 @@ void AttitudeEstimator::updateMahony(float ax, float ay, float az, float gx, flo
             float wy = 2.0f * bx * (_q[1] * _q[2] - _q[0] * _q[3]) + 2.0f * bz * (_q[0] * _q[1] + _q[2] * _q[3]);
             float wz = 2.0f * bx * (_q[0] * _q[2] + _q[1] * _q[3]) + 2.0f * bz * (0.5f - _q[1] * _q[1] - _q[2] * _q[2]);
 
-            ex += (my * wz - mz * wy); ey += (mz * wx - mx * wz); ez += (mx * wy - my * wx);
+            ex += _magWeight * (my * wz - mz * wy);
+            ey += _magWeight * (mz * wx - mx * wz);
+            ez += _magWeight * (mx * wy - my * wx);
         }
 
         if (_Ki > 0.0f) {
@@ -352,8 +383,8 @@ void AttitudeEstimator::updateMahony(float ax, float ay, float az, float gx, flo
         gx += _Kp * ex; gy += _Kp * ey; gz += _Kp * ez;
     }
 
-    _deltaT = 0.5f * _deltaT;
-    gx *= _deltaT; gy *= _deltaT; gz *= _deltaT;
+    float halfDt = 0.5f * _deltaT;
+    gx *= halfDt; gy *= halfDt; gz *= halfDt;
     qa = _q[0]; qb = _q[1]; qc = _q[2];
     _q[0] += (-qb * gx - qc * gy - _q[3] * gz);
     _q[1] += (qa * gx + qc * gz - _q[3] * gy);
@@ -369,4 +400,18 @@ void AttitudeEstimator::updateMahony(float ax, float ay, float az, float gx, flo
  */
 void AttitudeEstimator::updateEKF(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz) {
     // TODO: Implement EKF update
+}
+
+void AttitudeEstimator::setMagnetometerWeight(float weight) {
+    if (weight < 0.0f) weight = 0.0f;
+    if (weight > 1.0f) weight = 1.0f;
+    _magWeight = weight;
+}
+
+/**
+ * @brief Enable or disable magnetometer fusion.
+ * @param use True to enable.
+ */
+void AttitudeEstimator::setUseMagnetometer(bool use) {
+    _useMagnetometer = use;
 }

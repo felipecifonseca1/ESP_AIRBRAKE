@@ -66,8 +66,8 @@ bool DataManager::setupSD() {
     _logFile.println(
         "Time[ms],AccX[g],AccY[g],AccZ[g],GyroX[°/s],GyroY[°/s],GyroZ[°/"
         "s],MagX[uT],MagY[uT],MagZ[uT],qW,qX,qY,qZ,AltFilt[m],VelFilt[m/"
-        "s],AccVert[m/"
-        "s^2],Tilt[°],PressBMP[Pa],Servo[%],PID_Gain,Cd_Gain,Estado");
+        "s],AccVert[m/s^2],Tilt[°],PressBMP[Pa],Servo[%],PID_Gain,Cd_Gain,Estado");
+
 
     if (LOG_SYNC_INTERVAL_SD <= 1) {
       _logFile.close();
@@ -327,7 +327,7 @@ void DataManager::logFlightData(const RawFlightData& data) {
     return;
   }
 
-  if (!_loggingActive || _hilStabilizing) return;
+  if (!_loggingActive) return;
 
   // Global decimation check
   _decimationCounter++;
@@ -374,8 +374,8 @@ void DataManager::writeToSD(const RawFlightData& data) {
                   data.gyroY, data.gyroZ, data.magX, data.magY, data.magZ,
                   data.qW, data.qX, data.qY, data.qZ, data.filteredAltitude,
                   data.filteredVerticalVelocity, data.netVerticalAcceleration,
-                  data.tilt, data.barometricPressure, data.airbrakeDeployment,
-                  data.pid_gain, data.cd_gain, (int)data.flightState);
+                  data.tilt, data.barometricPressure, 
+                  data.airbrakeDeployment, data.pid_gain, data.cd_gain, (int)data.flightState);
 
   _sdBuffer += rowBuf;
   _sdBufferCount++;
@@ -720,13 +720,14 @@ HILMode DataManager::detectHILFormat(String headerLine) {
 
   // Full Mode: time, acc(3), gyro(3), mag(3), press (10 commas)
   if (commaCount >= 10) {
-    DEBUG_PRINTLN_F("HIL: Detected FULL SENSOR format (11+ cols).");
+    DEBUG_PRINTLN_F("HIL: Detected SENSOR REPLAY format.");
     return HILMode::FULL;
   }
 
   DEBUG_PRINTLN_F("HIL: Unknown format.");
   return HILMode::NONE;
 }
+
 
 /**
  * @brief Parses a single line from the HIL file.
@@ -740,7 +741,12 @@ HILSimulationData DataManager::parseHILLine(String line) {
   if (line.length() == 0)
     return data;
 
-  // Format: time, pressure, net_accel, tilt
+  // Split line into parts to handle variable column counts
+  int commaCount = 0;
+  for (char c : line) if (c == ',') commaCount++;
+  int numValues = commaCount + 1;
+
+  // Simple Mode: time, pressure, net_accel, tilt
   if (_currentHILMode == HILMode::SIMPLE) {
     int p1 = line.indexOf(',');
     int p2 = line.indexOf(',', p1 + 1);
@@ -756,43 +762,53 @@ HILSimulationData DataManager::parseHILLine(String line) {
       data.valid = true;
     }
   }
-
-  // Format: time, ax, ay, az, gx, gy, gz, mx, my, mz, pressure
   else if (_currentHILMode == HILMode::FULL) {
-
-    float values[11];
-    int currentIdx = 0;
+    // Collect values into a buffer
+    float values[32]; 
     int pStart = 0;
-    int pEnd = 0;
-
-    for (int i = 0; i < 11; i++) {
-      pEnd = line.indexOf(',', pStart);
-      if (pEnd == -1)
-        pEnd = line.length();
-
-      String val = line.substring(pStart, pEnd);
-      values[i] = val.toFloat();
-
-      pStart = pEnd + 1;
-      if (pStart > line.length())
-        break; // Safety break
+    for (int i = 0; i < numValues && i < 32; i++) {
+        int pEnd = line.indexOf(',', pStart);
+        if (pEnd == -1) pEnd = line.length();
+        values[i] = line.substring(pStart, pEnd).toFloat();
+        pStart = pEnd + 1;
     }
 
-    data.time_s = values[0];
+    if (numValues == 11) {
+      // Input Format (Teste_HIL_Sensors): time, ax, ay, az, gx, gy, gz, mx, my, mz, pressure
+      data.time_s = values[0];
+      data.accX_ms2 = values[1];
+      data.accY_ms2 = values[2];
+      data.accZ_ms2 = values[3];
+      data.gyroX_rads = values[4];
+      data.gyroY_rads = values[5];
+      data.gyroZ_rads = values[6];
+      data.magX_T = values[7] * 1000000.0f; // Convert Tesla to microTesla
+      data.magY_T = values[8] * 1000000.0f;
+      data.magZ_T = values[9] * 1000000.0f;
 
-    // IMU Data
-    data.accX_ms2 = values[1];
-    data.accY_ms2 = values[2];
-    data.accZ_ms2 = values[3];
-    data.gyroX_rads = values[4];
-    data.gyroY_rads = values[5];
-    data.gyroZ_rads = values[6];
-    data.magX_T = values[7];
-    data.magY_T = values[8];
-    data.magZ_T = values[9];
+      // applying auto-sign correction for reversed RocketPy files
+      if (_hilReverseZ) {
+          data.accZ_ms2 = -data.accZ_ms2;
+          data.gyroY_rads = -data.gyroY_rads;
+          data.gyroZ_rads = -data.gyroZ_rads;
+      }
 
-    // Baro
-    data.barometricPressure_Pa = values[10];
+      data.barometricPressure_Pa = values[10];
+    } 
+    else if (numValues >= 23) {
+      // Replay Format (Log V2): time_ms, acc_g(3), gyro_dps(3), mag_ut(3), q(4), ..., press_pa(index 20)
+      data.time_s = values[0] / 1000.0f;
+      data.accX_ms2 = values[1] * 9.80665f;
+      data.accY_ms2 = values[2] * 9.80665f;
+      data.accZ_ms2 = values[3] * 9.80665f;
+      data.gyroX_rads = values[4] * (PI / 180.0f);
+      data.gyroY_rads = values[5] * (PI / 180.0f);
+      data.gyroZ_rads = values[6] * (PI / 180.0f);
+      data.magX_T = values[7]; // Already in microTesla
+      data.magY_T = values[8];
+      data.magZ_T = values[9];
+      data.barometricPressure_Pa = values[20];
+    }
 
     data.hasFullIMU = true;
     data.valid = true;
@@ -800,6 +816,7 @@ HILSimulationData DataManager::parseHILLine(String line) {
 
   return data;
 }
+
 
 /**
  * @brief Initiates a Hardware-in-the-Loop (HIL) simulation by loading data from
@@ -868,14 +885,27 @@ bool DataManager::initHIL(const char *filename) {
         return false;
       }
 
-      // --- Orientation Guard ---
+      // --- Orientation Guard & Auto-Sign Detection ---
       if (_staticHILFrame.hasFullIMU) {
-        bool csvSeemsZDown = (_staticHILFrame.accZ_ms2 < -5.0f);
-        if (csvSeemsZDown != PHYSICAL_Z_AXIS_DOWN) {
+        // [AUTO-DETECT] RocketPy-style ZDown files often have +9.8 stationary.
+        // But our filter treats Z-Down as -9.8 (flipped in update).
+        // If HIL_Z_AXIS_DOWN is true but the file starts POSITIVE, it's reversed.
+        _hilReverseZ = (HIL_Z_AXIS_DOWN && _staticHILFrame.accZ_ms2 > 5.0f);
+        
+        if (_hilReverseZ) {
+           DEBUG_PRINTLN_F("HIL: Reverse-Z convention detected for Z-Down file (+Stat). Autocoding Z-signs.");
+           // Apply detection to the static frame immediately
+           _staticHILFrame.accZ_ms2 = -_staticHILFrame.accZ_ms2;
+           _staticHILFrame.gyroY_rads = -_staticHILFrame.gyroY_rads;
+           _staticHILFrame.gyroZ_rads = -_staticHILFrame.gyroZ_rads;
+        }
+
+        bool csvActuallyZDown = (_staticHILFrame.accZ_ms2 < -5.0f);
+        if (csvActuallyZDown != HIL_Z_AXIS_DOWN) {
           DEBUG_PRINTF(
               "[HIL WARNING] Orientation mismatch! CSV:%s | Config:%s\n",
-              csvSeemsZDown ? "Z-DOWN" : "Z-UP",
-              PHYSICAL_Z_AXIS_DOWN ? "Z-DOWN" : "Z-UP");
+              csvActuallyZDown ? "Z-DOWN" : "Z-UP",
+              HIL_Z_AXIS_DOWN ? "Z-DOWN" : "Z-UP");
         }
       }
 
@@ -1314,7 +1344,7 @@ void DataManager::runFrequencyTest(uint32_t freq, u_int16_t flushLimit,
     return; // Exit if no host
   RawFlightData data = {123456, 1.1,  -2.2,     9.8, 0.1,  0.2,  0.3,   15.0,
                         20.0,   25.0, 1.0,      0.0, 0.0,  0.0,  100.5, 50.2,
-                        1.5,    5.0,  101325.0, 45,  0.02, 0.07, 2};
+                        1.5,    5.0,  101325.0, 45,  0.02, 0.06, 2};
   DEBUG_PRINTLN_F("\n=======================================");
   DEBUG_PRINTF("STABILITY TEST AT %d MHz (%s mode)\n", freq / 1000000, oneBitMode ? "1-bit" : "4-bit");
 
@@ -1339,8 +1369,8 @@ void DataManager::runFrequencyTest(uint32_t freq, u_int16_t flushLimit,
                     data.gyroY, data.gyroZ, data.magX, data.magY, data.magZ,
                     data.qW, data.qX, data.qY, data.qZ, data.filteredAltitude,
                     data.filteredVerticalVelocity, data.netVerticalAcceleration,
-                    data.tilt, data.barometricPressure, data.airbrakeDeployment,
-                    data.pid_gain, data.cd_gain, data.flightState);
+                    data.tilt, data.barometricPressure, 
+                    data.airbrakeDeployment, data.pid_gain, data.cd_gain, data.flightState);
       } else {
         file.print(data.timestamp);
         file.print(',');
@@ -1470,8 +1500,8 @@ void DataManager::runStrategyBenchmark(uint32_t freq,u_int16_t numberOfRecords) 
                   data.gyroY, data.gyroZ, data.magX, data.magY, data.magZ,
                   data.qW, data.qX, data.qY, data.qZ, data.filteredAltitude,
                   data.filteredVerticalVelocity, data.netVerticalAcceleration,
-                  data.tilt, data.barometricPressure, data.airbrakeDeployment,
-                  data.pid_gain, data.cd_gain, data.flightState);
+                  data.tilt, data.barometricPressure, 
+                  data.airbrakeDeployment, data.pid_gain, data.cd_gain, data.flightState);
 
       if (flushInterval > 0 && (i % flushInterval == 0)) {
         file.flush();

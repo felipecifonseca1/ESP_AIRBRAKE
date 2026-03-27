@@ -4,7 +4,6 @@
 #include <Wire.h>
 #include "IMUSensor.h"
 #include "MPU9250/MPU9250.h" 
-#include "Config_voo.h"
 
 /**
  * @class MPU9250_HAL
@@ -34,25 +33,27 @@ public:
 
     // Virtual Overrides
     bool init(bool verbose = true, bool autoCalibrate = false) override;
-    bool update() override;
+    bool update(float dt = 0.02f) override;
     void injectData(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz) override;
 
     void calibrateAccel() override;
     void calibrateGyro() override;
     void calibrateMag() override;
+    void calibrateMagVisual();
+    bool isMagDataNew();
 
     // --- Raw Data Getters ---
     float getAccX() const override { return _mpu.getAccX(); } 
     float getAccY() const override { return _mpu.getAccY(); }
-    float getAccZ() const override { return _mpu.getAccZ(); }
+    float getAccZ() const override { return -_mpu.getAccZ(); } // ! Fix to acceleration range Up Down (-1 ; 1) -->  (1  ; -1) 
 
     float getGyroX_rads() const override { return _mpu.getGyroX() * DEG_TO_RAD; }
     float getGyroY_rads() const override { return _mpu.getGyroY() * DEG_TO_RAD; }
-    float getGyroZ_rads() const override { return _mpu.getGyroZ() * DEG_TO_RAD; }
+    float getGyroZ_rads() const override { return -_mpu.getGyroZ() * DEG_TO_RAD; } //! Flipped to correct physical inversion
 
     float getMagX() const override { return _mpu.getMagX(); }
     float getMagY() const override { return _mpu.getMagY(); }
-    float getMagZ() const override { return _mpu.getMagZ(); }
+    float getMagZ() const override { return -_mpu.getMagZ(); } //! Flipped to correct physical inversion
 
     float getTemperature() const override { return _mpu.getTemperature(); }
 
@@ -67,7 +68,17 @@ public:
     void saveCalibration(bool printDebug = false); ///< Save hardware registers and mag params to EEPROM
     void clearHardwareOffsets();                    ///< Clear all internal bias registers to zero
     void loadCalibration(bool printDebug = false); ///< Load calibration from EEPROM to hardware
-    void eraseCalibration();                       ///< Wipe calibration data from EEPROM
+    /**
+     * @enum CalibEraseType
+     * @brief Specifies which portion of the calibration to wipe.
+     */
+    enum class CalibEraseType {
+        ALL,        ///< Wipes everything and invalidates the EEPROM magic
+        ACCEL_GYRO, ///< Wipes only Accel/Gyro biases from EEPROM
+        MAG         ///< Wipes only Magnetometer biases/scales from EEPROM
+    };
+
+    void eraseCalibration(CalibEraseType type = CalibEraseType::ALL); ///< Wipe calibration data from EEPROM
 
     /**
      * @brief Performs a full IMU calibration sequence (Accel, Gyro, Mag)
@@ -96,6 +107,8 @@ public:
     MPU9250& getRawDevice() { return _mpu; }
 
 private:
+    bool _magDataFresh = false;
+    void forceBypass();
     void printVector(const char* label, const float values[], float scale, int decimals, const char* unit_label);
     void collectBiasErrors(int samples, float result_accel_g[3], float result_gyro_dps[3], bool physicalZAxisDown);
 };

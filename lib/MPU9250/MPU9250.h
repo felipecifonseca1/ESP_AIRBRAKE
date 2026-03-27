@@ -526,6 +526,7 @@ public:
         lin_acc[2] = a[2] - a33;
     }
 
+    float error_in_g = -4096.0f / 2048.0f;
     void update_accel_gyro() {
         int16_t raw_acc_gyro_data[7];        // used to read all 14 bytes at once from the MPU9250 accel/gyro
         read_accel_gyro(raw_acc_gyro_data);  // INT cleared on any read
@@ -534,6 +535,8 @@ public:
         a[0] = (float)raw_acc_gyro_data[0] * acc_resolution;  // get actual g value, this depends on scale being set
         a[1] = (float)raw_acc_gyro_data[1] * acc_resolution;
         a[2] = (float)raw_acc_gyro_data[2] * acc_resolution;
+
+        a[2]-= error_in_g; // ! Fix to acceleration range Up Down (-1 ; 1) -->  (1  ; -1) 
         
         // Serial.print("Raw X: ");
         // Serial.print((float)raw_acc_gyro_data[0]);

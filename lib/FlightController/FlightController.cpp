@@ -1,31 +1,38 @@
 #include "FlightController.h"
-#include "AltitudeSpeedTable.hh"
 #include "DataManager.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+
+extern QueueHandle_t flightDataQueue;
+#include "AltitudeSpeedTable.hh"
 #include "DragCoefficientTable.hh"
-#include <Arduino.h>
+#include "MPU9250_HAL.h"
 #include "Sinalizacao.h"
+#include <Arduino.h>
 #include <ArduinoEigenDense.h>
 #include <math.h>
-#include "MPU9250_HAL.h"
+
 
 using namespace Eigen;
 
 // --- RTC Memory Backup ---
 static RTC_NOINIT_ATTR FlightRecoveryData _rtcBackup;
-static const uint32_t RTC_MAGIC = 0xABBA1234; 
+static const uint32_t RTC_MAGIC = 0xABBA1234;
 
 /**
  * @brief Gets the singleton instance of the FlightController.
- * @attention The very first time this is called in setup(), the BarometricSensor pointer must be provided.
+ * @attention The very first time this is called in setup(), the
+ * BarometricSensor pointer must be provided.
  * @return Reference to the FlightController instance.
  */
-FlightController &FlightController::getInstance(BarometricSensor* b, AttitudeEstimator* estimator) {
+FlightController &FlightController::getInstance(BarometricSensor *b,
+                                                AttitudeEstimator *estimator) {
   static FlightController instance(b, estimator);
   if (b != nullptr) {
-      instance.baro = b;
+    instance.baro = b;
   }
   if (estimator != nullptr) {
-      instance._attitudeEstimator = estimator;
+    instance._attitudeEstimator = estimator;
   }
   return instance;
 }
@@ -33,10 +40,11 @@ FlightController &FlightController::getInstance(BarometricSensor* b, AttitudeEst
 /**
  * @brief Constructor. Initializes the PID controller and resets buffers.
  */
-FlightController::FlightController(BarometricSensor* b, AttitudeEstimator* estimator): 
-    baro(b), 
-    _attitudeEstimator(estimator), 
-    _controller(PID_KP, PID_KI, PID_KD, ROCKET_MASS_KG, AIRBRAKE_REF_AREA_M2, Ts){ // Initialize PID Controller using global constants
+FlightController::FlightController(BarometricSensor *b,
+                                   AttitudeEstimator *estimator)
+    : baro(b), _attitudeEstimator(estimator),
+      _controller(PID_KP, PID_KI, PID_KD, ROCKET_MASS_KG, AIRBRAKE_REF_AREA_M2,
+                  Ts) { // Initialize PID Controller using global constants
 
   // Initialize buffers
   for (int i = 0; i < _burnoutWindowSize; i++)
@@ -64,30 +72,32 @@ void FlightController::setupController() {
  * @brief Initializes the Kalman Filter matrices and parameters.
  */
 void FlightController::setupKalman() {
-  _F_kf << 1.0f, Ts,
-           0.0f, 1.0f;
+  _F_kf << 1.0f, Ts, 0.0f, 1.0f;
   _G_kf << 0.5 * Ts * Ts, Ts;
-  _H_kf << 1, 0,
-           0, 1; // ZUKF velocity 
+  _H_kf << 1, 0, 0, 1; // ZUKF velocity
 
   float var_proc_pos = KALMAN_VAR_PROC_POS;
   float var_proc_vel = KALMAN_VAR_PROC_VEL;
-  _Q_kf << var_proc_pos * (Ts * Ts * Ts * Ts) / 4.0, var_proc_pos * (Ts * Ts * Ts) / 2, 
-           var_proc_pos * (Ts * Ts * Ts) / 2,        var_proc_vel * Ts * Ts;
+  _Q_kf << var_proc_pos * (Ts * Ts * Ts * Ts) / 4.0,
+      var_proc_pos * (Ts * Ts * Ts) / 2, var_proc_pos * (Ts * Ts * Ts) / 2,
+      var_proc_vel * Ts * Ts;
 
-  float var_med_alt = KALMAN_VAR_MEAS_ALT; // Standard variance for altitude measurement
-  float var_zupt_vel = KALMAN_VAR_ZUPT_VEL; // Very low variance for ZUPT velocity measurement
+  float var_med_alt =
+      KALMAN_VAR_MEAS_ALT; // Standard variance for altitude measurement
+  float var_zupt_vel =
+      KALMAN_VAR_ZUPT_VEL; // Very low variance for ZUPT velocity measurement
 
   _R_kf << var_med_alt, 0, 0, var_zupt_vel;
 
   _P0_kf << 1, 0, // Altitude uncertainty
-            0, 1; // Velocity uncertainty
+      0, 1;       // Velocity uncertainty
 
-  _X0_kf << 0, 
-            0; // AGL altitude and vertical speed initial estimates
+  _X0_kf << 0,
+      0; // AGL altitude and vertical speed initial estimates
 
   _kf.init(_F_kf, _G_kf, _H_kf, _Q_kf, _R_kf, _P0_kf, _X0_kf);
-  DEBUG_PRINTLN_F("FlightController: Kalman filter initialized internal estimation.");
+  DEBUG_PRINTLN_F(
+      "FlightController: Kalman filter initialized internal estimation.");
 }
 
 /**
@@ -99,9 +109,10 @@ bool FlightController::runStateEstimator() {
   _diagnostics.flightState = (uint8_t)_flightState;
   uint32_t step_us;
   bool motor_on = (_flightState == FlightState::MOTOR_ON);
-  
-  // Local variable for HIL data
+
+  RawFlightData data;
   HILSimulationData hilData;
+
 
   if (HIL_MODE_ACTIVE) {
     // --- HIL Mode: Read data from CSV file ---
@@ -121,63 +132,81 @@ bool FlightController::runStateEstimator() {
     step_us = micros();
     _barometricPressure = hilData.barometricPressure_Pa;
 
-    if (hilData.hasFullIMU) {
-      float accX_g = hilData.accX_ms2 / G_GRAVITATIONAL_CONSTANT;
-      float accY_g = hilData.accY_ms2 / G_GRAVITATIONAL_CONSTANT;
-      float accZ_g = hilData.accZ_ms2 / G_GRAVITATIONAL_CONSTANT;
-
-      float gyroX_degs = hilData.gyroX_rads * RAD_TO_DEG;
-      float gyroY_degs = hilData.gyroY_rads * RAD_TO_DEG;
-      float gyroZ_degs = hilData.gyroZ_rads * RAD_TO_DEG;
-
-      float magX_mG = hilData.magX_T * 1e7;
-      float magY_mG = hilData.magY_T * 1e7;
-      float magZ_mG = hilData.magZ_T * 1e7;
-
-      // [DEBUG] Add a flag to skip Mag during HIL if drifting
-      bool skipHILMag = false; 
-      if (skipHILMag) { magX_mG = 0; magY_mG = 0; magZ_mG = 0; }
-
-      _attitudeEstimator->getIMU()->injectData(accX_g, accY_g, accZ_g, gyroX_degs, gyroY_degs, gyroZ_degs, magX_mG, magY_mG, magZ_mG);
+    if (hilData.hasFullIMU) {      // Extract basic HIL variables
+      float ax = hilData.accX_ms2 / G_GRAVITATIONAL_CONSTANT;
+      float ay = hilData.accY_ms2 / G_GRAVITATIONAL_CONSTANT;
+      float az = hilData.accZ_ms2 / G_GRAVITATIONAL_CONSTANT;
       
-      // Use motor_on status to mask accel jumps in HIL
-      _attitudeEstimator->update(Ts, motor_on); 
-      
-      _netVerticalAcceleration = _attitudeEstimator->getNetVerticalAcceleration();
-      _tilt = readCurrentTilt();
+      // DataManager now provides gyro in rad/s but controller expects rad/s for injection too
+      float gx = hilData.gyroX_rads;
+      float gy = hilData.gyroY_rads;
+      float gz = hilData.gyroZ_rads;
 
-      // [DEBUG] Log anomalies in HIL
-      if (abs(_tilt) > 90.0f && _flightState <= FlightState::WAIT_LAUNCH) {
-          static uint32_t lastTiltWarn = 0;
-          if (millis() - lastTiltWarn > 2000) {
-              DEBUG_PRINTF("HIL_WARN: Unusual Tilt detected: %.2f | AccZ: %.2f | q:[%.2f, %.2f, %.2f, %.2f]\n", 
-                  _tilt, accZ_g, _attitudeEstimator->getQuaternionW(), _attitudeEstimator->getQuaternionX(), 
-                  _attitudeEstimator->getQuaternionY(), _attitudeEstimator->getQuaternionZ());
-              lastTiltWarn = millis();
-          }
-      }
+      float mx = USE_MAGNETOMETER ? hilData.magX_T : 0.0f; // DataManager now provides Tesla
+      float my = USE_MAGNETOMETER ? hilData.magY_T : 0.0f;
+      float mz = USE_MAGNETOMETER ? hilData.magZ_T : 0.0f;
+
+      // In HIL mode the sensor convention comes from the CSV file (HIL_Z_AXIS_DOWN),
+      // which may differ from the physical hardware mount (PHYSICAL_Z_AXIS_DOWN).
+      // Both update() and getNetVerticalAcceleration() must use the same effective flag
+      // so the filter quaternion and the AccVert projection are in the same frame.
+      constexpr bool effectiveZDown = HIL_Z_AXIS_DOWN;
+
+      // Assign sim-time to data row for correct log playback
+      data.timestamp = (uint32_t)(hilData.time_s * 1000.0f);
+
+      // NOTE: sign flips are now handled entirely by the AttitudeEstimator
+      _attitudeEstimator->getIMU()->injectData(ax, ay, az, gx, gy, gz, mx, my, mz);
+
+      _attitudeEstimator->update(Ts, motor_on, effectiveZDown);
+
+      _tilt = _attitudeEstimator->getTilt(effectiveZDown);
+      _netVerticalAcceleration = _attitudeEstimator->getNetVerticalAcceleration(effectiveZDown);
     } else {
       _netVerticalAcceleration = hilData.netVerticalAcceleration_ms2;
-      _tilt = 90 - hilData.tilt; 
+      _tilt = 90 - hilData.tilt;
     }
     _diagnostics.imuFilter_us = micros() - step_us;
     _diagnostics.navCalc_us = 0; // Grouped above
-    
+
     step_us = micros(); // Reset for Kalman section
   } else {
     // --- Real Mode: Read data from sensors ---
     step_us = micros();
-    _attitudeEstimator->getIMU()->update();
+
+    // Calculate Dynamic DT based on actual loop timing
+    uint32_t nowUs = micros();
+    float dt_actual = Ts; // Initial default
+    if (_lastEstimatorLoopUs > 0) {
+      dt_actual = (nowUs - _lastEstimatorLoopUs) / 1000000.0f;
+      if (dt_actual > 0.1f)
+        dt_actual = Ts; // Guard against first run or massive stalls
+    }
+    _lastEstimatorLoopUs = nowUs;
+
+    _attitudeEstimator->getIMU()->update(dt_actual);
     _barometricPressure = baro->getPressurePa();
     _diagnostics.sensorRead_us = micros() - step_us;
 
     step_us = micros();
-    _attitudeEstimator->update(Ts, motor_on);
+
+    // If the sensor is mounted Z-Down, we should transform it into a virtual
+    // Z-Up frame so the filter math remains standard and numerically stable.
+    // The AttitudeEstimator::update function handles the Z-Down transformation
+    // internally based on the PHYSICAL_Z_AXIS_DOWN parameter.
+
+    // [FLIGHT MODE BETA] Set beta based on flight phase if not on pad
+    if (_flightState == FlightState::MOTOR_ON) {
+        _attitudeEstimator->setFilterBeta(0.1f); // Smooth during thrust
+    }
+
+    _attitudeEstimator->update(dt_actual, motor_on, PHYSICAL_Z_AXIS_DOWN);
     _diagnostics.imuFilter_us = micros() - step_us;
 
     step_us = micros();
-    _netVerticalAcceleration = _attitudeEstimator->getNetVerticalAcceleration();
-    _tilt = readCurrentTilt();
+    _netVerticalAcceleration =
+        _attitudeEstimator->getNetVerticalAcceleration(PHYSICAL_Z_AXIS_DOWN);
+    _tilt = _attitudeEstimator->getTilt(PHYSICAL_Z_AXIS_DOWN);
     _diagnostics.navCalc_us = micros() - step_us;
   }
 
@@ -193,7 +222,8 @@ bool FlightController::runStateEstimator() {
     Z_kf << measuredAltitude_m, 0.0f; // Zero velocity measurement for ZUKF
     _kf.Update(Z_kf, _R_kf);
   } else {
-    DEBUG_PRINTLN_F("WARNING: Invalid altitude measurement. Kalman Update skipped.");
+    DEBUG_PRINTLN_F(
+        "WARNING: Invalid altitude measurement. Kalman Update skipped.");
   }
 
   // Get the posteriori state estimate
@@ -201,7 +231,7 @@ bool FlightController::runStateEstimator() {
   _filteredAltitude = stateEstimate(0, 0);
   _filteredVerticalVelocity = stateEstimate(1, 0);
   _diagnostics.kalmanUpdate_us = micros() - step_us;
-  
+
   // --- Update Loop Diagnostics ---
   _diagnostics.totalExecute_us = micros() - start_us;
   _diagnostics.totalCycles++;
@@ -212,13 +242,38 @@ bool FlightController::runStateEstimator() {
     _diagnostics.peakExecution_us = _diagnostics.totalExecute_us;
   }
 
-  // Update max recorded height for real-time telemetry
-  if (_filteredAltitude > _maxRecordedHeight) {
-    _maxRecordedHeight = _filteredAltitude;
-  }
+  // Populate RawFlightData for logging/telemetry
+  data.timestamp = HIL_MODE_ACTIVE ? (uint32_t)(hilData.time_s * 1000.0f) : millis();
+  
+  IMUSensor* imu = _attitudeEstimator->getIMU();
+  data.accX = imu->getAccX();
+  data.accY = imu->getAccY();
+  data.accZ = imu->getAccZ();
+  data.gyroX = imu->getGyroX_rads() * (180.0f / PI);
+  data.gyroY = imu->getGyroY_rads() * (180.0f / PI);
+  data.gyroZ = imu->getGyroZ_rads() * (180.0f / PI);
+  data.magX = imu->getMagX();
+  data.magY = imu->getMagY();
+  data.magZ = imu->getMagZ();
+  
+  data.qW = _attitudeEstimator->getQuaternionW();
+  data.qX = _attitudeEstimator->getQuaternionX();
+  data.qY = _attitudeEstimator->getQuaternionY();
+  data.qZ = _attitudeEstimator->getQuaternionZ();
+  
+  data.filteredAltitude = _filteredAltitude;
+  data.filteredVerticalVelocity = _filteredVerticalVelocity;
+  data.netVerticalAcceleration = _netVerticalAcceleration;
+  data.tilt = _tilt;
+  data.barometricPressure = _barometricPressure;
+  data.airbrakeDeployment = (int16_t)(_airbrakeDeployment * 100.0f);
+  data.pid_gain = _pid_gain;
+  data.cd_gain = _cd_gain;
+  data.flightState = (uint8_t)_flightState;
 
   return true; // Data valid
 }
+
 
 void FlightController::resetDiagnostics() {
   uint64_t total = _diagnostics.totalCycles;
@@ -227,11 +282,12 @@ void FlightController::resetDiagnostics() {
 }
 
 /**
- * @brief Updates the provided data structure with the current flight state and sensor readings.
+ * @brief Updates the provided data structure with the current flight state and
+ * sensor readings.
  * @param data Reference to the RawFlightData structure to populate.
  */
 void FlightController::updateLogger(RawFlightData &data) {
-  data.timestamp = millis(); 
+  data.timestamp = millis();
   data.accX = _attitudeEstimator->getIMU()->getAccX();
   data.accY = _attitudeEstimator->getIMU()->getAccY();
   data.accZ = _attitudeEstimator->getIMU()->getAccZ();
@@ -249,7 +305,7 @@ void FlightController::updateLogger(RawFlightData &data) {
   data.filteredVerticalVelocity = _filteredVerticalVelocity;
   data.netVerticalAcceleration = _netVerticalAcceleration;
   data.tilt = _tilt;
-  data.barometricPressure = _barometricPressure; 
+  data.barometricPressure = _barometricPressure;
   data.airbrakeDeployment = _airbrakeDeployment * 100;
   data.pid_gain = _pid_gain;
   data.cd_gain = _cd_gain;
@@ -257,10 +313,11 @@ void FlightController::updateLogger(RawFlightData &data) {
 }
 
 /**
- * @brief Main update loop. Runs the estimator and executes the logic for the current flight state.
+ * @brief Main update loop. Runs the estimator and executes the logic for the
+ * current flight state.
  */
 void FlightController::update() {
-  
+
   if (!runStateEstimator()) {
     return; // Stop processing if HIL simulation finished
   }
@@ -268,13 +325,14 @@ void FlightController::update() {
   // --- Recovery System Update ---
   static FlightState lastState = FlightState::SENSOR_CALIBRATION;
   static uint32_t lastRTCSave = 0;
-  
+
   // Save on state change
   if (_flightState != lastState) {
     saveStateToRTC();
 
     // Selective Force Sync for critical data persistence (Apogee/Landing)
-    if (_flightState == FlightState::DESCENT || _flightState == FlightState::LANDING) {
+    if (_flightState == FlightState::DESCENT ||
+        _flightState == FlightState::LANDING) {
       DataManager::getInstance().forceSync();
     }
 
@@ -288,36 +346,36 @@ void FlightController::update() {
   // ------------------------------
 
   switch (_flightState) {
-    case FlightState::SENSOR_CALIBRATION:
-      calibrationCheckLoop();
-      break;
-    case FlightState::HEALTH_CHECK:
-      healthCheckLoop();
-      break;
-    case FlightState::WAIT_LAUNCH:
-      waitLaunchLoop();
-      break;
-    case FlightState::MOTOR_ON:
-      motorOnLoop();
-      break;
-    case FlightState::BURNOUT:
-      burnoutLoop();
-      break;
-    case FlightState::AIRBRAKE_DEPLOYMENT:
-      airbrakeDeploymentLoop();
-      break;
-    case FlightState::APOGEE:
-      apogeeLoop();
-      break;
-    case FlightState::DESCENT:
-      descentLoop();
-      break;
-    case FlightState::LANDING:
-      landingLoop();
-      break;
-    default:
-      break;
-    }
+  case FlightState::SENSOR_CALIBRATION:
+    calibrationCheckLoop();
+    break;
+  case FlightState::HEALTH_CHECK:
+    healthCheckLoop();
+    break;
+  case FlightState::WAIT_LAUNCH:
+    waitLaunchLoop();
+    break;
+  case FlightState::MOTOR_ON:
+    motorOnLoop();
+    break;
+  case FlightState::BURNOUT:
+    burnoutLoop();
+    break;
+  case FlightState::AIRBRAKE_DEPLOYMENT:
+    airbrakeDeploymentLoop();
+    break;
+  case FlightState::APOGEE:
+    apogeeLoop();
+    break;
+  case FlightState::DESCENT:
+    descentLoop();
+    break;
+  case FlightState::LANDING:
+    landingLoop();
+    break;
+  default:
+    break;
+  }
 }
 
 // --- Internal Loops ---
@@ -328,9 +386,12 @@ void FlightController::update() {
 void FlightController::calibrationCheckLoop() {
   // Throttle: only print once per second (50 cycles at 20ms)
   static uint8_t calPrintCtr = 0;
-  if (++calPrintCtr >= 50) { DEBUG_PRINTLN_F("STATE: Sensor Calibration"); calPrintCtr = 0; }
+  if (++calPrintCtr >= 50) {
+    DEBUG_PRINTLN_F("STATE: Sensor Calibration");
+    calPrintCtr = 0;
+  }
 
-  MPU9250_HAL* hal = static_cast<MPU9250_HAL*>(_attitudeEstimator->getIMU());
+  MPU9250_HAL *hal = static_cast<MPU9250_HAL *>(_attitudeEstimator->getIMU());
   if (hal->hasCalibrationData() && baro->getGroundPressureP0() != 101325.0f) {
     DEBUG_PRINTLN_F("FlightLogic: Sensors Ready (Calibrated).");
     _flightState = FlightState::HEALTH_CHECK;
@@ -344,7 +405,10 @@ void FlightController::calibrationCheckLoop() {
 void FlightController::healthCheckLoop() {
   // Throttle: only print once per second (50 cycles at 20ms)
   static uint8_t hcPrintCtr = 0;
-  if (++hcPrintCtr >= 50) { DEBUG_PRINTLN_F("State: Health Check"); hcPrintCtr = 0; }
+  if (++hcPrintCtr >= 50) {
+    DEBUG_PRINTLN_F("State: Health Check");
+    hcPrintCtr = 0;
+  }
 
   baro->recalibrateGroundPressure(_barometricPressure);
 
@@ -353,15 +417,14 @@ void FlightController::healthCheckLoop() {
     DEBUG_PRINT_F("Component health OK this iteration. Count: ");
     DEBUG_PRINTLN(_healthCheckCount);
 
-    if (_healthCheckCount >=_reqHealthChecks) { 
+    if (_healthCheckCount >= _reqHealthChecks) {
       DEBUG_PRINTLN_F("HEALTH CHECK: Consecutive checks OK. Transitioning...");
 
       _flightState = FlightState::WAIT_LAUNCH;
       DataManager::getInstance().startLogging(); // Activate data logging
 
       // System settings for wait-for-launch
-      _attitudeEstimator->setDriftLearning(true); // Enable drift learning on the IMU
-      _attitudeEstimator->setFilterBeta(5.0f); // Increase filter beta for faster response during wait
+      _attitudeEstimator->setFilterBeta(10.0f); // High initial gain for fast alignment on pad
       DEBUG_PRINTLN_F("FlightLogic: Ready for Launch -> WAIT_LAUNCH.");
       _R_kf(1, 1) = 0.000001f; // Reduce velocity measurement variance for ZUKF
       DataManager::getInstance().setDecimationFactor(10);
@@ -381,6 +444,12 @@ void FlightController::healthCheckLoop() {
 void FlightController::waitLaunchLoop() {
   baro->recalibrateGroundPressure(_barometricPressure);
 
+  uint32_t timeOnPad = millis() - _stateEntryTime;
+  if (timeOnPad > 5000) {
+    _attitudeEstimator->setFilterBeta(0.05f); // Rock solid stable on pad
+  } else {
+    _attitudeEstimator->setFilterBeta(10.0f); // Faster initial convergence (snaps to gravity)
+  }
   if (detectLaunch(_netVerticalAcceleration, _filteredAltitude)) {
     DEBUG_PRINTLN_F("LAUNCH DETECTED!");
 
@@ -403,7 +472,7 @@ void FlightController::motorOnLoop() {
   unsigned long tempoDesdeLancamento = millis() - _launchDetectedTime;
   if (detectBurnout(_netVerticalAcceleration, tempoDesdeLancamento)) {
     DEBUG_PRINTLN_F("BURNOUT DETECTED!");
-    _attitudeEstimator->setFilterBeta(0.75f);
+    _attitudeEstimator->setFilterBeta(0.1f);
     _flightState = FlightState::BURNOUT;
     _stateEntryTime = millis();
   }
@@ -415,25 +484,30 @@ void FlightController::motorOnLoop() {
 void FlightController::burnoutLoop() {
   // Check for airbrakes actuation window
   if (detectAirbrakesActuation(_filteredAltitude, _filteredVerticalVelocity)) {
-    DEBUG_PRINTLN_F("Appropriate speed detected, initiating airbrake actuation.");
+    DEBUG_PRINTLN_F(
+        "Appropriate speed detected, initiating airbrake actuation.");
     _flightState = FlightState::AIRBRAKE_DEPLOYMENT;
     _stateEntryTime = millis();
   }
 }
 
 /**
- * @brief Loop for AIRBRAKE_DEPLOYMENT state. Controls airbrakes and monitors for apogee.
+ * @brief Loop for AIRBRAKE_DEPLOYMENT state. Controls airbrakes and monitors
+ * for apogee.
  */
 void FlightController::airbrakeDeploymentLoop() {
   // Airbrake control logic
   _delta_V_ms = lookUpSpeed(_filteredAltitude) - _filteredVerticalVelocity;
 
   _pid_gain = _controller.computePID(0, _delta_V_ms);
-  _cd_gain = _controller.computeCd(apoggeTargetAltitude_m, _filteredAltitude, _filteredVerticalVelocity, -G_GRAVITATIONAL_CONSTANT, RHO_AIR);
+  _cd_gain = _controller.computeCd(apoggeTargetAltitude_m, _filteredAltitude,
+                                   _filteredVerticalVelocity,
+                                   -G_GRAVITATIONAL_CONSTANT, RHO_AIR);
   _controlInput = _pid_gain + _cd_gain;
 
   if (_tilt < maxTiltAngle) {
-    _airbrakeDeployment = getNearestActuation((_filteredVerticalVelocity / MACH_VELOCITY), _controlInput);
+    _airbrakeDeployment = getNearestActuation(
+        (_filteredVerticalVelocity / MACH_VELOCITY), _controlInput);
   } else {
     _airbrakeDeployment = 0.0;
   }
@@ -458,7 +532,8 @@ void FlightController::apogeeLoop() {
   DEBUG_PRINTLN_F("Airbrakes retracted at apogee.");
 
   _flightState = FlightState::DESCENT;
-  DataManager::getInstance().setDecimationFactor(10); // Save every 10x20ms = 200ms
+  DataManager::getInstance().setDecimationFactor(
+      10); // Save every 10x20ms = 200ms
   _stateEntryTime = millis();
 }
 
@@ -467,17 +542,20 @@ void FlightController::apogeeLoop() {
  */
 void FlightController::descentLoop() {
   unsigned long tempoDesdeApogeu = millis() - _apogeeDetectedTime;
-  if (detectLanding(_filteredVerticalVelocity, _filteredAltitude, tempoDesdeApogeu)) {
+  if (detectLanding(_filteredVerticalVelocity, _filteredAltitude,
+                    tempoDesdeApogeu)) {
     DEBUG_PRINTLN_F("LANDING DETECTED!");
     _flightState = FlightState::LANDING;
-    DataManager::getInstance().setDecimationFactor(50); // Save every 50x20ms = 1s
+    DataManager::getInstance().setDecimationFactor(
+        50); // Save every 50x20ms = 1s
     _stateEntryTime = millis();
   }
   // Timeout for LANDING detection if not detected after long time
   else if (tempoDesdeApogeu > _maxWaitTimeLanding) {
     DEBUG_PRINTLN_F("Timeout for LANDING detection.");
     _flightState = FlightState::LANDING; // Force LANDING state
-    DataManager::getInstance().setDecimationFactor(50); // Save every 50x20ms = 1s
+    DataManager::getInstance().setDecimationFactor(
+        50); // Save every 50x20ms = 1s
     _stateEntryTime = millis();
   }
 }
@@ -499,7 +577,8 @@ void FlightController::landingLoop() {
 
   // Non-blocking slow-down: use timestamp instead of delay(10000)
   static uint32_t _landingLastPrint = 0;
-  if (millis() - _landingLastPrint < 10000) return;
+  if (millis() - _landingLastPrint < 10000)
+    return;
   _landingLastPrint = millis();
   DEBUG_PRINTLN_F("STATE: LANDING - idle");
 }
@@ -507,24 +586,34 @@ void FlightController::landingLoop() {
 // --- Specific Methods ---
 
 /**
- * @brief Forces the flight controller into a specific state. Useful for debugging or HIL.
+ * @brief Forces the flight controller into a specific state. Useful for
+ * debugging or HIL.
  * @param newState The target FlightState.
  */
 void FlightController::forceState(FlightState newState) {
-    _flightState = newState;
-    _stateEntryTime = millis();
-    DEBUG_PRINT_F("FlightState Forced to: ");
-    DEBUG_PRINTLN((int)_flightState);
-    saveStateToRTC(); // Update backup
+  _flightState = newState;
+  _stateEntryTime = millis();
+  DEBUG_PRINT_F("FlightState Forced to: ");
+  DEBUG_PRINTLN((int)_flightState);
+  saveStateToRTC(); // Update backup
+
+  if (_flightState >= FlightState::WAIT_LAUNCH) {
+    DataManager::getInstance().startLogging();
+    DataManager::getInstance().setDecimationFactor(
+        1); // Default to 1 for high-res HIL
 
     if (_flightState == FlightState::WAIT_LAUNCH) {
-        DataManager::getInstance().startLogging(); 
-        DataManager::getInstance().setDecimationFactor(10);
-        _attitudeEstimator->setDriftLearning(true); 
-        _attitudeEstimator->setFilterBeta(5.0f);
-        _R_kf(1, 1) = 0.000001f; 
-        _healthCheckCount = 0;
+      DataManager::getInstance().setDecimationFactor(
+          10); // Throttle back slightly
+      if (_attitudeEstimator) {
+        _attitudeEstimator->setDriftLearning(false); // [FIX] Disabled Integral Windup: Trust the static Gyro Calibration instead.
+        _attitudeEstimator->resetEstimatorState();   // [DIAGNOSTIC] Clear any biases from startup
+      }
+      _attitudeEstimator->setFilterBeta(10.0f);
+      _R_kf(1, 1) = 0.000001f;
+      _healthCheckCount = 0;
     }
+  }
 }
 
 /**
@@ -532,27 +621,20 @@ void FlightController::forceState(FlightState newState) {
  * @return true if servo setup is successful, false otherwise.
  */
 bool FlightController::setupServo() {
-  noTone(PIN_BUZZER); 
+  noTone(PIN_BUZZER);
   pinMode(PIN_BUZZER, OUTPUT);
   digitalWrite(PIN_BUZZER, LOW);
   delay(1500); // Massive delay to let LEDC HW settle after tones
-  
-  DEBUG_PRINTLN_F("SETUP_SERVO: Attempting manual LEDC attach...");
-  
-  // Use 13-bit resolution (8191 max) for 50Hz, which is well-supported on S3
-  #if defined(ESP32)
-  if (!ledcAttach(_pinServoAirbrake, 50, 13)) {
-      DEBUG_PRINTLN_F("ERROR: LEDC attach failed!");
-      return false;
+
+  DEBUG_PRINTLN_F("SETUP_SERVO: Initializing ESP32Servo...");
+
+  _airbrakeServo.setPeriodHertz(50);
+  if (_airbrakeServo.attach(_pinServoAirbrake, _servoMinPulse, _servoMaxPulse) == 0) {
+    DEBUG_PRINTLN_F("ERROR: ESP32Servo attach failed!");
+    return false;
   }
-  
-  /*  --- ALTERNATIVE WAY (Using ESP32Servo Library) ---
-      _airbrakeServo.setPeriodHertz(50);
-      _airbrakeServo.attach(_pinServoAirbrake, _servoMinPulse, _servoMaxPulse);
-  */
-  #endif
-  
-  DEBUG_PRINTLN_F("SETUP_SERVO: LEDC configuration complete.");
+
+  DEBUG_PRINTLN_F("SETUP_SERVO: Servo configuration complete.");
   commandAirbrakes(0); // Set to zero
 
   return true;
@@ -563,30 +645,19 @@ bool FlightController::setupServo() {
  * @param desiredPosition 0.0 to 1.0
  */
 void FlightController::commandAirbrakes(float desiredPosition) {
-  // Convert desired position to pulse width (500us to 2500us nominally for 0-180)
-  // Our config: _servoMinPulse = 560, _servoMaxPulse = 1520 (for 0-90)
-  
-  float pulse_us = _servoMinPulse + (desiredPosition * (_servoMaxPulse - _servoMinPulse));
-  
-  // Convert to 13-bit duty cycle (50Hz = 20000us period)
-  // 13 bits = 8191 counts. Duty = (pulse / 20000) * 8191
-  uint32_t duty = (pulse_us / 20000.0f) * 8191.0f;
-  
-  #if defined(ESP32)
-  ledcWrite(_pinServoAirbrake, duty);
+  // Convert desired position to pulse width (500us to 2500us nominally for
+  // 0-180) Our config: _servoMinPulse = 560, _servoMaxPulse = 1520 (for 0-90)
 
-  /*  --- ALTERNATIVE WAY (Using ESP32Servo Library) ---
-      _airbrakeServo.writeMicroseconds(pulse_us); 
-  */
-  #endif
+  float pulse_us =
+      _servoMinPulse + (desiredPosition * (_servoMaxPulse - _servoMinPulse));
+
+  _airbrakeServo.writeMicroseconds(pulse_us);
 }
 
 /**
  * @brief Commands the airbrakes to fully retracted position.
  */
-void FlightController::retractAirbrakes() {
-  commandAirbrakes(0);
-}
+void FlightController::retractAirbrakes() { commandAirbrakes(0); }
 
 /**
  * @brief Checks the health status of the flight logic system.
@@ -604,35 +675,44 @@ bool FlightController::checkFlightSystemHealth(float filteredAltitude,
   float az = _attitudeEstimator->getIMU()->getAccZ();
   float accel_mag = sqrt(ax * ax + ay * ay + az * az);
 
-  if (accel_mag < (1.0f - HEALTH_ACCEL_MAG_TOLERANCE) || accel_mag > (1.0f + HEALTH_ACCEL_MAG_TOLERANCE)) { // Tolerance defined in Config_voo
+  if (accel_mag < (1.0f - HEALTH_ACCEL_MAG_TOLERANCE) ||
+      accel_mag >
+          (1.0f +
+           HEALTH_ACCEL_MAG_TOLERANCE)) { // Tolerance defined in Config_voo
     DEBUG_PRINTLN_F("FlightLogic: Health Failure - Accel Magnitude.");
     healthOk = false;
   }
 
-  if (abs(_attitudeEstimator->getIMU()->getGyroX_rads()) > (HEALTH_GYRO_TOLERANCE_DPS * DEG_TO_RAD) || 
-      abs(_attitudeEstimator->getIMU()->getGyroY_rads()) > (HEALTH_GYRO_TOLERANCE_DPS * DEG_TO_RAD) ||
-      abs(_attitudeEstimator->getIMU()->getGyroZ_rads()) > (HEALTH_GYRO_TOLERANCE_DPS * DEG_TO_RAD)) { // Tolerance defined in Config_voo
+  if (abs(_attitudeEstimator->getIMU()->getGyroX_rads()) >
+          (HEALTH_GYRO_TOLERANCE_DPS * DEG_TO_RAD) ||
+      abs(_attitudeEstimator->getIMU()->getGyroY_rads()) >
+          (HEALTH_GYRO_TOLERANCE_DPS * DEG_TO_RAD) ||
+      abs(_attitudeEstimator->getIMU()->getGyroZ_rads()) >
+          (HEALTH_GYRO_TOLERANCE_DPS *
+           DEG_TO_RAD)) { // Tolerance defined in Config_voo
     DEBUG_PRINTLN_F("FlightLogic: Health Failure - High Gyro.");
     healthOk = false;
   }
 
   // Kalman Filter Health Check
-  if (abs(filteredAltitude) > HEALTH_ALT_TOLERANCE_M) { // Tolerance defined in Config_voo
+  if (abs(filteredAltitude) >
+      HEALTH_ALT_TOLERANCE_M) { // Tolerance defined in Config_voo
     DEBUG_PRINT_F("FlightLogic: Health Failure - Altitude Kalman: ");
     DEBUG_PRINTLN(filteredAltitude);
     healthOk = false;
   }
-  if (abs(filteredVerticalVelocity) > HEALTH_VEL_TOLERANCE_MS) { // Tolerance defined in Config_voo
+  if (abs(filteredVerticalVelocity) >
+      HEALTH_VEL_TOLERANCE_MS) { // Tolerance defined in Config_voo
     DEBUG_PRINT_F("FlightLogic: Health Failure - Velocity Kalman: ");
     DEBUG_PRINTLN(filteredVerticalVelocity);
     healthOk = false;
   }
-  // ! Add back when a servo is connected
+  // ! Add back when a servo is physically connected and attach() succeeds
   // // Servo Health Check
-  // if (!_airbrakeServo.attached()) {
-  //   DEBUG_PRINTLN_F("FlightLogic: Health Failure - Servo connection.");
-  //   healthOk = false;
-  // }
+  if (!_airbrakeServo.attached()) {
+    DEBUG_PRINTLN_F("FlightLogic: Health Failure - Servo connection.");
+    healthOk = false;
+  }
 
   if (_testServo) {
     if (millis() - _servoTestLastTime >= 500) {
@@ -640,38 +720,38 @@ bool FlightController::checkFlightSystemHealth(float filteredAltitude,
       _servoTestStep++;
 
       switch (_servoTestStep) {
-        case 1:
-          // Step 1: Go to 0
-          _airbrakeServo.write(0);
-          DEBUG_PRINTLN_F("SERVO TEST: 0 deg");
-          break;
-        case 2:
-          // Step 2: Go to 45
-          _airbrakeServo.write(45);
-          DEBUG_PRINTLN_F("SERVO TEST: 45 deg");
-          break;
-        case 3:
-          // Step 3: Go to 90
-          _airbrakeServo.write(90);
-          DEBUG_PRINTLN_F("SERVO TEST: 90 deg");
-          break;
-        case 4:
-          // Step 4: Go to 45
-          _airbrakeServo.write(45);
-          DEBUG_PRINTLN_F("SERVO TEST: 45 deg");
-          break;
-        case 5:
-          // Step 5: Go to 0 and Finish
-          _airbrakeServo.write(0);
-          DEBUG_PRINTLN_F("SERVO TEST: 0 deg (Done)");
-          _testServo = false;
-          _servoTestStep = 0;
-          return healthOk; // Return actual health status now that test is done
-          break;
+      case 1:
+        // Step 1: Go to 0
+        _airbrakeServo.write(0);
+        DEBUG_PRINTLN_F("SERVO TEST: 0 deg");
+        break;
+      case 2:
+        // Step 2: Go to 45
+        _airbrakeServo.write(45);
+        DEBUG_PRINTLN_F("SERVO TEST: 45 deg");
+        break;
+      case 3:
+        // Step 3: Go to 90
+        _airbrakeServo.write(90);
+        DEBUG_PRINTLN_F("SERVO TEST: 90 deg");
+        break;
+      case 4:
+        // Step 4: Go to 45
+        _airbrakeServo.write(45);
+        DEBUG_PRINTLN_F("SERVO TEST: 45 deg");
+        break;
+      case 5:
+        // Step 5: Go to 0 and Finish
+        _airbrakeServo.write(0);
+        DEBUG_PRINTLN_F("SERVO TEST: 0 deg (Done)");
+        _testServo = false;
+        _servoTestStep = 0;
+        return healthOk; // Return actual health status now that test is done
+        break;
       }
     }
     // While testing, return false to keep system in HEALTH_CHECK state
-    return false; 
+    return false;
   }
 
   return healthOk;
@@ -683,8 +763,10 @@ bool FlightController::checkFlightSystemHealth(float filteredAltitude,
  * @param filteredAltitude Filtered altitude in meters.
  * @return true if launch is detected, false otherwise.
  */
-bool FlightController::detectLaunch(float verticalAcceleration,float filteredAltitude) {
-  if (abs(verticalAcceleration) > _accelLimitLaunch || filteredAltitude > _heightLimitLaunch) {
+bool FlightController::detectLaunch(float verticalAcceleration,
+                                    float filteredAltitude) {
+  if (abs(verticalAcceleration) > _accelLimitLaunch ||
+      filteredAltitude > _heightLimitLaunch) {
     DEBUG_PRINTLN_F("FLIGHT_LOGIC: Launch detected!");
     return true;
   }
@@ -698,7 +780,8 @@ bool FlightController::detectLaunch(float verticalAcceleration,float filteredAlt
  * @param timeSinceLaunch Time since launch in milliseconds.
  * @return true if burnout is detected, false otherwise.
  */
-bool FlightController::detectBurnout(float verticalAcceleration,unsigned long timeSinceLaunch) {
+bool FlightController::detectBurnout(float verticalAcceleration,
+                                     unsigned long timeSinceLaunch) {
   // Update moving average buffer
   _burnoutMovingSum -= _burnoutBufferAcc[_burnoutIndexHead];
   _burnoutBufferAcc[_burnoutIndexHead] = verticalAcceleration;
@@ -721,7 +804,8 @@ bool FlightController::detectBurnout(float verticalAcceleration,unsigned long ti
   }
 
   // Check burnout condition
-  if (timeSinceLaunch > _minMotorBurnTime && abs(movingAverageAcc) < _accelLimitBurnout) {
+  if (timeSinceLaunch > _minMotorBurnTime &&
+      abs(movingAverageAcc) < _accelLimitBurnout) {
     _burnoutCounter++;
   } else {
     _burnoutCounter = 0;
@@ -740,8 +824,10 @@ bool FlightController::detectBurnout(float verticalAcceleration,unsigned long ti
  * @param filteredVerticalVelocity Filtered vertical velocity in m/s.
  * @return true if airbrakes actuation is detected, false otherwise.
  */
-bool FlightController::detectAirbrakesActuation(float filteredAltitude, float filteredVerticalVelocity) {
-  if (filteredAltitude > _minActuationHeight && abs(filteredVerticalVelocity) < _velLimitActuation) {
+bool FlightController::detectAirbrakesActuation(
+    float filteredAltitude, float filteredVerticalVelocity) {
+  if (filteredAltitude > _minActuationHeight &&
+      abs(filteredVerticalVelocity) < _velLimitActuation) {
     DEBUG_PRINTLN_F("FLIGHT_LOGIC: Conditions for airbrake actuation met.");
     return true;
   }
@@ -754,7 +840,8 @@ bool FlightController::detectAirbrakesActuation(float filteredAltitude, float fi
  * @param filteredAltitude Filtered altitude in meters.
  * @return true if apogee is detected, false otherwise.
  */
-bool FlightController::detectApogee(float filteredVerticalVelocity,float filteredAltitude) {
+bool FlightController::detectApogee(float filteredVerticalVelocity,
+                                    float filteredAltitude) {
   // Update max recorded height
   if (filteredAltitude > _maxRecordedHeight) {
     _maxRecordedHeight = filteredAltitude;
@@ -837,9 +924,8 @@ bool FlightController::detectApogeeByRegression(float filteredAltitude,
   // 4. Setup and Solve the Linear System
   // Matrix A * x = B
   Matrix3d A;
-  A << (double)_regressionWindowSize, sum_t, sum_t2, 
-       sum_t, sum_t2, sum_t3, 
-       sum_t2, sum_t3, sum_t4;
+  A << (double)_regressionWindowSize, sum_t, sum_t2, sum_t, sum_t2, sum_t3,
+      sum_t2, sum_t3, sum_t4;
 
   Vector3d B;
   B << sum_y, sum_ty, sum_t2y;
@@ -864,7 +950,8 @@ bool FlightController::detectApogeeByRegression(float filteredAltitude,
       t0;
   float estimatedVelocity = 2.0f * a * t_final + b;
 
-  bool isDescending = (estimatedVelocity < APOGEE_REGRESSION_DESCENDING_THRESHOLD);
+  bool isDescending =
+      (estimatedVelocity < APOGEE_REGRESSION_DESCENDING_THRESHOLD);
 
   if (isConcave && isDescending) {
     _regressionApogeeConfirmed = true;
@@ -911,7 +998,7 @@ bool FlightController::detectLanding(float filteredVerticalVelocity,
  * @return Current tilt angle in degrees.
  */
 float FlightController::readCurrentTilt() {
-  return _attitudeEstimator->getTilt(PHYSICAL_Z_AXIS_DOWN); 
+  return _attitudeEstimator->getTilt(PHYSICAL_Z_AXIS_DOWN);
 }
 
 // --- Recovery System Implementation ---
@@ -931,51 +1018,108 @@ void FlightController::resetRecoveryData() {
 }
 
 bool FlightController::attemptRecovery() {
-    DEBUG_PRINTLN_F("RECOVERY: Checking for valid RTC backup...");
-    
-    if (_rtcBackup.magicNumber == RTC_MAGIC) {
-        DEBUG_PRINTLN_F("RECOVERY: Valid backup found!");
-        
-        // Restore Critical References FIRST
-        // Only restore P0/T0 if not in calibration/health check states
-        if (_flightState != FlightState::SENSOR_CALIBRATION && 
-            _flightState != FlightState::HEALTH_CHECK) {
-            baro->setGroundPressureP0(_rtcBackup.basePressure);
-            baro->setGroundTemperatureT0(_rtcBackup.baseTemperature);
-            DEBUG_PRINT_F("RECOVERY: Restored P0: "); DEBUG_PRINT(_rtcBackup.basePressure);
-            DEBUG_PRINT_F(" Pa | T0: "); DEBUG_PRINT(_rtcBackup.baseTemperature);
-            DEBUG_PRINTLN_F(" C");
-        } else {
-            DEBUG_PRINTLN_F("RECOVERY: Skipping P0/T0 restore due to current state.");
-        }
-        
-        // Restore State
-        _flightState = _rtcBackup.state;
-        _maxRecordedHeight = _rtcBackup.maxAltitude;
-        
-        // Adjust entry time relative to new millis() 
-        // Original duration = stored_timestamp - stored_entryTime
-        uint32_t durationInState = _rtcBackup.timestamp - _rtcBackup.stateEntryTime;
-        if (durationInState > millis()) {
-             // If we were in state longer than current uptime, wrap around logic
-              _stateEntryTime = millis() - durationInState;
-        } else {
-             _stateEntryTime = millis() - durationInState;
-        }
+  DEBUG_PRINTLN_F("RECOVERY: Checking for valid RTC backup...");
 
-        DEBUG_PRINTLN_F("RECOVERY: State restored successfully.");
-        return true;
+  if (_rtcBackup.magicNumber == RTC_MAGIC) {
+    DEBUG_PRINTLN_F("RECOVERY: Valid backup found!");
+
+    // Restore Critical References FIRST
+    // Only restore P0/T0 if not in calibration/health check states
+    if (_flightState != FlightState::SENSOR_CALIBRATION &&
+        _flightState != FlightState::HEALTH_CHECK) {
+      baro->setGroundPressureP0(_rtcBackup.basePressure);
+      baro->setGroundTemperatureT0(_rtcBackup.baseTemperature);
+      DEBUG_PRINT_F("RECOVERY: Restored P0: ");
+      DEBUG_PRINT(_rtcBackup.basePressure);
+      DEBUG_PRINT_F(" Pa | T0: ");
+      DEBUG_PRINT(_rtcBackup.baseTemperature);
+      DEBUG_PRINTLN_F(" C");
+    } else {
+      DEBUG_PRINTLN_F("RECOVERY: Skipping P0/T0 restore due to current state.");
     }
-    DEBUG_PRINTLN_F("RECOVERY: No valid backup or Magic mismatch.");
-    return false;
+
+    // Restore State
+    _flightState = _rtcBackup.state;
+    _maxRecordedHeight = _rtcBackup.maxAltitude;
+
+    // Adjust entry time relative to new millis()
+    // Original duration = stored_timestamp - stored_entryTime
+    uint32_t durationInState = _rtcBackup.timestamp - _rtcBackup.stateEntryTime;
+    if (durationInState > millis()) {
+      // If we were in state longer than current uptime, wrap around logic
+      _stateEntryTime = millis() - durationInState;
+    } else {
+      _stateEntryTime = millis() - durationInState;
+    }
+
+    DEBUG_PRINTLN_F("RECOVERY: State restored successfully.");
+    return true;
+  }
+  DEBUG_PRINTLN_F("RECOVERY: No valid backup or Magic mismatch.");
+  return false;
 }
 
 /**
  * @brief Prints the full telemetry payload to standard serial for plotting
  */
-void FlightController::printFullTelemetry(const RawFlightData& data) {
-  if (!_telemetryEnabled) return;
+void FlightController::printFullTelemetry(const RawFlightData &data) {
+  if (!_telemetryEnabled)
+    return;
 
+#if USE_TELEPLOT == 0
+  // Standard Monitor
+  switch ((FlightState)data.flightState) {
+  case FlightState::SENSOR_CALIBRATION:
+    PRINT_STATE("CALIBRATION");
+    break;
+  case FlightState::HEALTH_CHECK:
+    PRINT_STATE("HEALTH_CHECK");
+    break;
+  case FlightState::WAIT_LAUNCH:
+    PRINT_STATE("WAIT_LAUNCH");
+    PLOT_VAR("Alt", data.filteredAltitude);
+    PLOT_VAR("VelZ", data.filteredVerticalVelocity);
+    PLOT_VAR("AccelZ", data.netVerticalAcceleration);
+    PLOT_VAR("Tilt", data.tilt);
+    break;
+  case FlightState::MOTOR_ON:
+    PRINT_STATE("MOTOR_ON");
+    PLOT_VAR("Alt", data.filteredAltitude);
+    PLOT_VAR("VelZ", data.filteredVerticalVelocity);
+    PLOT_VAR("Tilt", data.tilt);
+    break;
+  case FlightState::BURNOUT:
+    PRINT_STATE("BURNOUT");
+    PLOT_VAR("Alt", data.filteredAltitude);
+    PLOT_VAR("VelZ", data.filteredVerticalVelocity);
+    PLOT_VAR("Tilt", data.tilt);
+    break;
+  case FlightState::AIRBRAKE_DEPLOYMENT:
+    PRINT_STATE("AIRBRAKE_DEPLOYMENT");
+    PLOT_VAR("Alt", data.filteredAltitude);
+    PLOT_VAR("VelZ", data.filteredVerticalVelocity);
+    PLOT_VAR("Tilt", data.tilt);
+    PLOT_VAR("Deflection", data.airbrakeDeployment);
+    break;
+  case FlightState::APOGEE:
+    PRINT_STATE("APOGEE");
+    PLOT_VAR("Max_Alt", _maxRecordedHeight);
+    break;
+  case FlightState::DESCENT:
+    PRINT_STATE("DESCENT");
+    PLOT_VAR("Alt", data.filteredAltitude);
+    PLOT_VAR("VelZ", data.filteredVerticalVelocity);
+    break;
+  case FlightState::LANDING:
+    PRINT_STATE("LANDING");
+    break;
+  default:
+    PRINT_STATE("UNKNOWN");
+    break;
+  }
+  DEBUG_PRINTLN(); // Newline for the summary row
+#else
+  // Teleplot: Full Data Stream for High-Res Graphing
   PLOT_VAR("AccX", data.accX);
   PLOT_VAR("AccY", data.accY);
   PLOT_VAR("AccZ", data.accZ);
@@ -992,17 +1136,17 @@ void FlightController::printFullTelemetry(const RawFlightData& data) {
   PLOT_VAR("Alt", data.filteredAltitude);
   PLOT_VAR("VelZ", data.filteredVerticalVelocity);
   PLOT_VAR("AccelZ", data.netVerticalAcceleration);
-  PLOT_VAR("Max_Alt", _maxRecordedHeight); // Still use internal max Recorded height
+  PLOT_VAR("Alt", data.filteredAltitude);
+  PLOT_VAR("VelZ", data.filteredVerticalVelocity);
+  PLOT_VAR("AccelZ", data.netVerticalAcceleration);
+  PLOT_VAR("Max_Alt",_maxRecordedHeight); 
   PLOT_VAR("Tilt", data.tilt);
   PLOT_VAR("TiltLimit", maxTiltAngle);
   PLOT_VAR("Max", maxTiltAngle);
-  PLOT_VAR("Press", data.barometricPressure); // Pa
+  PLOT_VAR("Press", data.barometricPressure);      // Pa
   PLOT_VAR("Deflection", data.airbrakeDeployment); // %
   PLOT_VAR("PID_Gain", data.pid_gain);
   PLOT_VAR("Cd_Gain", data.cd_gain);
   PLOT_VAR("FlightState", data.flightState);
-
-#if USE_TELEPLOT == 0
-  DEBUG_PRINTLN(); // Add newline for Standard Monitor mode
 #endif
 }

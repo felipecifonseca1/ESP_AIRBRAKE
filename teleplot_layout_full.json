@@ -311,8 +311,8 @@
       {
          "type": "chart",
          "gridPos": {
-            "h": 7,
-            "w": 3,
+            "h": 6,
+            "w": 6,
             "x": 0,
             "y": 0
          },
@@ -336,8 +336,8 @@
       {
          "type": "chart",
          "gridPos": {
-            "h": 7,
-            "w": 3,
+            "h": 6,
+            "w": 6,
             "x": 0,
             "y": 0
          },
@@ -361,8 +361,8 @@
       {
          "type": "chart",
          "gridPos": {
-            "h": 7,
-            "w": 3,
+            "h": 6,
+            "w": 6,
             "x": 0,
             "y": 0
          },
@@ -386,8 +386,8 @@
       {
          "type": "chart",
          "gridPos": {
-            "h": 7,
-            "w": 3,
+            "h": 6,
+            "w": 6,
             "x": 0,
             "y": 0
          },
@@ -450,7 +450,7 @@
                "formula": "",
                "options": {
                   "_serie": "Deflection",
-                  "_id": "data-serie-47",
+                  "_id": "data-serie-46",
                   "stroke": "rgba(231,76,60,1)",
                   "fill": "rgba(231,76,60,0.1)"
                },
@@ -474,8 +474,8 @@
                ],
                "formula": "",
                "options": {
-                  "_serie": "Gain2",
-                  "_id": "data-serie-48",
+                  "_serie": "PID_Gain",
+                  "_id": "data-serie-47",
                   "stroke": "rgba(231,76,60,1)",
                   "fill": "rgba(231,76,60,0.1)"
                },
@@ -499,8 +499,8 @@
                ],
                "formula": "",
                "options": {
-                  "_serie": "Gain2",
-                  "_id": "data-serie-49",
+                  "_serie": "Cd_Gain",
+                  "_id": "data-serie-48",
                   "stroke": "rgba(231,76,60,1)",
                   "fill": "rgba(231,76,60,0.1)"
                },
@@ -509,5 +509,5 @@
          ]
       }
    ],
-   "viewDuration": "60"
+   "viewDuration": "0"
 }

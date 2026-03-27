@@ -164,6 +164,7 @@ private:
         _loggingActive = false;
         _stopRequested = false;
         _HILLoggingActive = false;
+        _hilReverseZ = false;
         _decimationFactor = 1;
         _decimationCounter = 0;
         _sdAvailable = false;
@@ -234,6 +235,7 @@ private:
     bool _hilStabilizing;             // Flag to indicate stabilization state
     unsigned long _hilStartTimeMS;   
     const unsigned long _hilStabilizationDurationMS = HIL_STABILIZATION_MS; 
+    bool _hilReverseZ;                // Flag for flipped simulation signs (stat=+)
     HILSimulationData _staticHILFrame; // Data from the first line
    
     // Helpers

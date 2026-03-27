@@ -16,6 +16,7 @@
 
 // Modules
 #include "FlightController.h"
+#include "Config_voo.h"
 #include "BMP280_HAL.h"
 #include "MPU9250_HAL.h"
 #include "AttitudeEstimator.h"
@@ -198,6 +199,11 @@ void TaskSerialComm(void *pvParameters) {
         logger.resetIODiagnostics();
       }
 
+      if (cmd == 'e' || cmd == 'E') {
+        DEBUG_PRINTLN_F("Command received: RESET ATTITUDE ESTIMATOR");
+        flightController.resetAttitudeEstimator();
+      }
+
       if (cmd == 'm' || cmd == 'M') {
         if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(100)) == pdPASS) {
             const LoopDiagnostics& diag = flightController.getDiagnostics();
@@ -352,12 +358,15 @@ void setup() {
   // Setup Kalman and Controller
   DEBUG_PRINTLN_F("Initializing Kalman Filter...");
   flightController.setupKalman();
+  flightController.getAttitudeEstimator()->setUseMagnetometer(USE_MAGNETOMETER);
+  flightController.getAttitudeEstimator()->setMagnetometerWeight(MAGNETOMETER_FUSION_WEIGHT);
 
   // Serial.flush() removed to prevent blocking on boot if monitor is closed
 
   if (HIL_MODE_ACTIVE) {
     DEBUG_PRINTLN("HIL Mode: Forcing state to WAIT_LAUNCH");
     flightController.forceState(FlightState::WAIT_LAUNCH);
+    logger.startLogging(); // Start logging right away for HIL
   }
 
   SystemUtils::completeInitialization(WDT_TIMEOUT_MS);

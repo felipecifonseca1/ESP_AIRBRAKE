@@ -106,6 +106,7 @@ public:
   float getCdGain() const { return _cd_gain; }
   const LoopDiagnostics& getDiagnostics() const { return _diagnostics; }
   LoopDiagnostics& getDiagnosticsMutable() { return _diagnostics; }
+  AttitudeEstimator* getAttitudeEstimator() { return _attitudeEstimator; }
   void resetDiagnostics();
 
   // --- Telemetry ---
@@ -115,6 +116,7 @@ public:
 
   // --- Debug / HIL ---
   void forceState(FlightState newState);
+  void resetAttitudeEstimator() { if (_attitudeEstimator) _attitudeEstimator->resetEstimatorState(); }
 
   // --- Recovery System ---
   void saveStateToRTC();
@@ -158,8 +160,9 @@ private:
   float _barometricPressure;
 
   // Timers
-  uint32_t _stateEntryTime;
-  uint32_t _launchDetectedTime;
+  uint32_t _stateEntryTime = 0;
+  uint32_t _lastEstimatorLoopUs = 0;
+  uint32_t _launchDetectedTime = 0;
   uint32_t _apogeeDetectedTime;
 
   // PID Controller
@@ -189,7 +192,7 @@ private:
   const uint8_t _pinServoAirbrake = PIN_SERVO;
   const uint16_t _servoMinPulse = SERVO_MIN_PULSE;  // 0 deg
   const uint16_t _servoMaxPulse = SERVO_MAX_PULSE; // 90 deg
-  bool _testServo = false;
+  bool _testServo = TESTE_SERVO;
   uint8_t _servoTestStep = 0;
   uint32_t _servoTestLastTime = 0;
 

@@ -15,12 +15,12 @@
 // HARDWARE PINOUT & I2C ADDRESSES
 // =========================================================================
 
-constexpr uint8_t PIN_BUZZER              = 39; 
+constexpr uint8_t PIN_BUZZER              = 39;   // (JTAG Conflict)
 constexpr uint8_t PIN_LED_1               = 10;  
 constexpr uint8_t PIN_LED_2               = 48;  
-constexpr uint8_t PIN_SERVO               = 42;  
-constexpr uint8_t PIN_SDA                 = 1;         // I2C Data
-constexpr uint8_t PIN_SCL                 = 2;         // I2C Clock
+constexpr uint8_t PIN_SERVO               = 42;   // (JTAG Conflict)
+constexpr uint8_t PIN_SDA                 = 1;    // I2C Data
+constexpr uint8_t PIN_SCL                 = 2;    // I2C Clock
 
 // SDIO 4-bit Pins PCB
 constexpr uint8_t PIN_SDIO_CLK            = 12;
@@ -70,14 +70,18 @@ constexpr float apoggeTargetAltitude_m    = 3254.0f;   // Target mission apogee 
 constexpr float maxTiltAngle              = 60.0f;     // Max safety tilt for actuation [deg]
 constexpr uint32_t WDT_TIMEOUT_MS         = 5000;      // Watchdog timeout in milliseconds
 constexpr bool useRecovery                = false;     // Enable recovery sequence logic
-constexpr bool runBusScan                 = false;     // Run I2C bus scan at startup
+constexpr bool runBusScan                 = true;     // Run I2C bus scan at startup
 
 // --- IMU & Orientation ---
-constexpr bool PHYSICAL_Z_AXIS_DOWN       = true;      // IMU Mounting: true: Z-Down | false: Z-Up
+constexpr bool PHYSICAL_Z_AXIS_DOWN       = true;      // IMU Mounting   : true: Z-Down | false: Z-Up
 constexpr bool CALIBRATE_IMU_ON_STARTUP   = true;      // Run library calib ONLY if data is missing
 constexpr bool PRINT_IMU_PARAMS           = false;     // Print biases to Serial at boot
-constexpr bool PERFORM_FINE_TUNING        = false;     // Run iterative bias tweak on every boot
+constexpr bool PERFORM_FINE_TUNING        = true;      // Run iterative bias tweak on every boot
 constexpr bool ERASE_CALIB_ON_STARTUP     = false;     // Force delete all saved IMU data
+constexpr bool USE_MAGNETOMETER           = false;     // Filter: Enable Mag for drift correction
+constexpr bool FORCED_MAG_CALIBRATION     = false;     // Trigger the 30s visual spin routine
+constexpr float MAGNETOMETER_FUSION_WEIGHT = 0.01f;    // Mag Authority: Restored to 5% with corrected Axis Alignment
+constexpr float ATTITUDE_GYRO_CUTOFF_DPS  = 0.15f;     // Gyro Deadband: Ignore rotations < this value [dps]
 
 // --- SD Card & Logging ---
 constexpr bool ENABLE_DATA_LOGGING        = true;      // Master switch for all logging
@@ -99,11 +103,17 @@ constexpr uint16_t LOG_SYNC_INTERVAL_SD   = 10;         // Sync every buffer flu
 constexpr uint16_t LOG_SYNC_INTERVAL_INT  = 15000;      // Sync Internal Flash 
 
 // --- HIL (Hardware-In-the-Loop) ---
-constexpr bool HIL_MODE_ACTIVE            = true;       // Enable serial-in sensor simulation
-constexpr char HIL_FILENAME[]             = "/Teste_HIL_Sensors_no_bias.csv";
-constexpr uint32_t HIL_STABILIZATION_MS   = 30000;      // Time to wait for estimator to settle [ms]
+constexpr bool HIL_MODE_ACTIVE            = false;       // Enable  sensor simulation
+constexpr char HIL_FILENAME[]             = "/Teste_HIL_Sensors_ZDown.csv";
+constexpr uint32_t HIL_STABILIZATION_MS   = 15000;      // Time to wait for estimator to settle [ms]
+// HIL CSV axis convention: 
+// true  = Apply Z-Down compensation (Use this for Z-Up files like RocketPy native -1G)
+// false = Pass data raw (Use this for Z-Down files where accel_z is already +1G)
+constexpr bool HIL_Z_AXIS_DOWN            = true;      // Convention of the HIL CSV file
+
 
 // --- Servo Specs ---
+constexpr bool TESTE_SERVO                = false;      // Enable servo test
 constexpr uint16_t SERVO_MIN_PULSE        = 560;        // Pulse length for 0 deg (retracted) [us]
 constexpr uint16_t SERVO_MAX_PULSE        = 1520;       // Pulse length for 90 deg (extended) [us]
 
@@ -158,7 +168,7 @@ constexpr uint32_t LANDING_MAX_WAIT_TIME_MS          = 600000; // Ultimate timeo
 // ATTITUDE ESTIMATOR & FILTERING
 // =========================================================================
 constexpr float ORIENTATION_MASK_MIN_G     = 0.5f;     // Ignore accel below this (Free-fall/Coast)
-constexpr float ORIENTATION_MASK_MAX_G     = 2.0f;     // Ignore accel above this (Thrust/Vibration)
+constexpr float ORIENTATION_MASK_MAX_G     = 16.0f;     // Ignore accel above this (Thrust/Vibration)
 
 // =========================================================================
 // SYSTEM HEALTH & DIAGNOSTICS

@@ -22,9 +22,10 @@ public:
 
     /**
      * @brief Polls the hardware for the latest data. Must be called rapidly in the main loop.
+     * @param dt Integration time step [s]
      * @return True if new data was successfully read.
      */
-    virtual bool update() = 0;
+    virtual bool update(float dt = 0.02f) = 0;
 
     /**
      * @brief Injects external sensor data for HIL (Hardware-In-the-Loop) simulations.

@@ -1,5 +1,6 @@
 #include "MPU9250_HAL.h"
 #include <EEPROM.h>
+#include "Config_voo.h"
 
 /**
  * @brief Constructor.
@@ -15,6 +16,9 @@ MPU9250_HAL::MPU9250_HAL(uint8_t i2cAddr) : _i2cAddr(i2cAddr) {
  */
 bool MPU9250_HAL::init(bool verbose, bool autoCalibrate) {
     if (verbose) DEBUG_PRINTLN_F("Initializing MPU from HAL...");
+
+    forceBypass();
+
     // Record the flight configuration
     _mpuConfig.accel_fs_sel = ACCEL_FS_SEL::A16G;
     _mpuConfig.gyro_fs_sel = GYRO_FS_SEL::G2000DPS;
@@ -26,10 +30,14 @@ bool MPU9250_HAL::init(bool verbose, bool autoCalibrate) {
     _mpuConfig.accel_dlpf_cfg = ACCEL_DLPF_CFG::DLPF_45HZ;
 
     bool success = _mpu.setup(_i2cAddr, _mpuConfig);
+    if (!success) {
+        DEBUG_PRINTLN_F("!!!! ERROR !!!!: MPU9250 Magnetometer (AK8963) setup FAILED! Mag data will be 0.00.");
+    }
+    
     if (success) {
         if (autoCalibrate) {
             if (ERASE_CALIB_ON_STARTUP) {
-                eraseCalibration();
+                eraseCalibration(CalibEraseType::ALL);
                 DEBUG_PRINTLN_F("BOOT: Erasing IMU calibration from EEPROM...");
             }
 
@@ -40,6 +48,10 @@ bool MPU9250_HAL::init(bool verbose, bool autoCalibrate) {
                     DEBUG_PRINTLN_F("Performing iterative Fine-Tuning update...");
                     adjustCalibrationIteratively(50, true, CALIBRATION_ACCEL_TOL_G, CALIBRATION_GYRO_TOL_DPS, CALIBRATION_MAX_ITERATIONS, PHYSICAL_Z_AXIS_DOWN);
                 }
+            }
+
+            if (FORCED_MAG_CALIBRATION) {
+               calibrateMagVisual();
             }
             
             // Final re-init to seat registers properly (warm-up)
@@ -65,10 +77,12 @@ void MPU9250_HAL::clearHardwareOffsets() {
 
 /**
  * @brief Poll the latest data from the sensor.
+ * @param dt Integration time step [s]
  * @return true if a new sample was available and read.
  */
-bool MPU9250_HAL::update() {
-    return _mpu.update(); 
+bool MPU9250_HAL::update(float dt) {
+    _magDataFresh = true; // Always allow filtering in the 50Hz loop for smoother interpolation
+    return _mpu.update(dt); 
 }
 
 /**
@@ -76,7 +90,8 @@ bool MPU9250_HAL::update() {
  */
 void MPU9250_HAL::injectData(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz) {
     // We use the Ts from Config_voo.h and assume motor_on=false for the filters during injection
-    // Coordinate mapping is already handled by external parameters in MPU9250::update
+    // Update internal MPU object so that raw getters return HIL data
+    // We pass Gs directly because MPU9250 library getters return the stored 'a' values.
     _mpu.update(Ts, false, false, ax, ay, az, gx, gy, gz, mx, my, mz);
 }
 
@@ -97,9 +112,165 @@ void MPU9250_HAL::calibrateGyro() {
 /**
  * @brief Trigger the library's internal magnetometer calibration.
  */
+/**
+ * @brief Trigger the library's internal magnetometer calibration.
+ */
 void MPU9250_HAL::calibrateMag() {
     _mpu.calibrateMag();
 }
+
+/**
+ * @brief Performs a 30-second "Figure-8" visual calibration for the Magnetometer.
+ * Provides real-time feedback and saves result to EEPROM.
+ */
+void MPU9250_HAL::calibrateMagVisual() {
+    DEBUG_PRINTLN_F("\n--- MAGNETOMETER VISUAL CALIBRATION ---");
+    
+    // [FORCE] Ensure I2C Bypass is active
+    forceBypass();
+
+
+    // [CHECK] Verify Magnetometer is actually there
+    Wire.beginTransmission(0x0C); // AK8963 Address
+    Wire.write(0x00); // WHO_AM_I
+    Wire.endTransmission(false);
+    Wire.requestFrom(0x0C, (uint8_t)1);
+    uint8_t magId = Wire.available() ? Wire.read() : 0xFF;
+    
+    DEBUG_PRINT_F("AK8963 WHO_AM_I: 0x"); DEBUG_PRINTLN(magId, HEX);
+    
+    if (magId != 0x48) {
+        DEBUG_PRINTLN_F("!!!! ERROR: AK8963 not found. Bypass FAILED! Mag will be zero.");
+    }
+
+    // [MODE] Force 100Hz 16-bit Continuous Mode (CNTL1 = 0x16)
+    Wire.beginTransmission(0x0C);
+    Wire.write(0x0A); Wire.write(0x16);
+    Wire.endTransmission();
+    delay(100);
+
+    // [WAIT] 2-second prep window so the user has time to grab the rocket
+    DEBUG_PRINTLN_F("GET READY... HOLD STILL (2s)");
+    delay(2000);
+
+    // [RESET] Clear any old biases in the library object so we get RAW data
+    _mpu.setMagBias(0, 0, 0);
+    _mpu.setMagScale(1, 1, 1);
+
+    float m_min[3], m_max[3];
+    bool firstSample = true;
+    
+    DEBUG_PRINTLN_F("CALIBRATING... SPIN THE ROCKET NOW (30s)!");
+    
+    uint32_t startTime = millis();
+    uint32_t lastPrint = 0;
+    
+    while (millis() - startTime < 30000) {
+        _mpu.update_mag(); 
+        
+        float mx = _mpu.getMagX();
+        float my = _mpu.getMagY();
+        float mz = _mpu.getMagZ();
+        
+        // Skip junk zeros at startup
+        if (abs(mx) < 0.001f && abs(my) < 0.001f && abs(mz) < 0.001f) {
+            delay(10);
+            continue;
+        }
+
+        if (firstSample) {
+            m_min[0] = m_max[0] = mx;
+            m_min[1] = m_max[1] = my;
+            m_min[2] = m_max[2] = mz;
+            firstSample = false;
+        } else {
+            // Update Min/Max bounds
+            if (mx < m_min[0]) m_min[0] = mx;
+            if (mx > m_max[0]) m_max[0] = mx;
+            if (my < m_min[1]) m_min[1] = my;
+            if (my > m_max[1]) m_max[1] = my;
+            if (mz < m_min[2]) m_min[2] = mz;
+            if (mz > m_max[2]) m_max[2] = mz;
+        }
+
+        if (millis() - lastPrint > 200) {
+            int progress = (millis() - startTime) / 300;
+            DEBUG_PRINT_F("P:"); DEBUG_PRINT(progress); DEBUG_PRINT_F("% | ");
+            DEBUG_PRINT_F("X("); DEBUG_PRINT((int)m_min[0]); DEBUG_PRINT_F(","); DEBUG_PRINT((int)m_max[0]);
+            DEBUG_PRINT_F(") Y("); DEBUG_PRINT((int)m_min[1]); DEBUG_PRINT_F(","); DEBUG_PRINT((int)m_max[1]);
+            DEBUG_PRINT_F(") Z("); DEBUG_PRINT((int)m_min[2]); DEBUG_PRINT_F(","); DEBUG_PRINT((int)m_max[2]);
+            DEBUG_PRINTLN_F(")");
+            lastPrint = millis();
+        }
+        delay(10);
+        yield();
+    }
+
+    // Safety check: if no data was collected, don't overwrite with 0s
+    if (m_max[0] < m_min[0] + 1.0f) {
+        DEBUG_PRINTLN_F("!!!! ERROR: No Mag data collected. Check Wiring/Power! Calibration aborted.");
+        return;
+    }
+
+    // Calculate Bias (Hard Iron)
+    float mbx = (m_max[0] + m_min[0]) / 2.0f;
+    float mby = (m_max[1] + m_min[1]) / 2.0f;
+    float mbz = (m_max[2] + m_min[2]) / 2.0f;
+
+    // Calculate Scale (Soft Iron)
+    float deltaX = m_max[0] - m_min[0];
+    float deltaY = m_max[1] - m_min[1];
+    float deltaZ = m_max[2] - m_min[2];
+    float avgDelta = (deltaX + deltaY + deltaZ) / 3.0f;
+
+    float msx = (deltaX > 0.1f) ? (avgDelta / deltaX) : 1.0f;
+    float msy = (deltaY > 0.1f) ? (avgDelta / deltaY) : 1.0f;
+    float msz = (deltaZ > 0.1f) ? (avgDelta / deltaZ) : 1.0f;
+
+    DEBUG_PRINTLN_F("\nCALIBRATION COMPLETE!");
+    _mpu.setMagBias(mbx, mby, mbz);
+    _mpu.setMagScale(msx, msy, msz);
+
+    // Save to EEPROM
+    float abx, aby, abz, gbx, gby, gbz;
+    EEPROM.get(1, abx); EEPROM.get(5, aby); EEPROM.get(9, abz);
+    EEPROM.get(13, gbx); EEPROM.get(17, gby); EEPROM.get(21, gbz);
+
+    EEPROM.write(0, CALIBRATION_MAGIC);
+    EEPROM.put(1, abx); EEPROM.put(5, aby); EEPROM.put(9, abz);
+    EEPROM.put(13, gbx); EEPROM.put(17, gby); EEPROM.put(21, gbz);
+    EEPROM.put(25, mbx); EEPROM.put(29, mby); EEPROM.put(33, mbz);
+    EEPROM.put(37, msx); EEPROM.put(41, msy); EEPROM.put(45, msz);
+    EEPROM.commit();
+
+    DEBUG_PRINT_F("Saved Mag Bias: ");  DEBUG_PRINT(mbx); DEBUG_PRINT_F(", "); DEBUG_PRINT(mby); DEBUG_PRINT_F(", "); DEBUG_PRINTLN(mbz);
+    DEBUG_PRINT_F("Saved Mag Scale: "); DEBUG_PRINT(msx); DEBUG_PRINT_F(", "); DEBUG_PRINT(msy); DEBUG_PRINT_F(", "); DEBUG_PRINTLN(msz);
+}
+
+/**
+ * @brief Force MPU9250 into I2C Bypass mode.
+ * Disables I2C Master and enables Bypass bit to allow direct access to AK8963.
+ */
+void MPU9250_HAL::forceBypass() {
+    // 0x37 = INT_PIN_CFG, 0x02 = BYPASS_EN
+    Wire.beginTransmission(_i2cAddr);
+    Wire.write(0x37); Wire.write(0x02);
+    Wire.endTransmission();
+    
+    // 0x6A = USER_CTRL, 0x00 = Disable I2C Master
+    Wire.beginTransmission(_i2cAddr);
+    Wire.write(0x6A); Wire.write(0x00);
+    Wire.endTransmission();
+    delay(10);
+}
+
+/**
+ * @brief Checks if the latest update() call included a fresh magnetic sample.
+ */
+bool MPU9250_HAL::isMagDataNew() {
+    return _magDataFresh;
+}
+
 
 // =========================================================================
 // SPECIFIC MPU9250 CALIBRATION METHODS
@@ -172,12 +343,40 @@ void MPU9250_HAL::saveCalibration(bool printDebug) {
 }
 
 /**
- * @brief Invalidate calibration in EEPROM.
+ * @brief Wipes selected portion of calibration data from EEPROM.
+ * @param type Portions to wipe: ALL, ACCEL_GYRO, or MAG.
  */
-void MPU9250_HAL::eraseCalibration() {
-    DEBUG_PRINTLN_F("BOOT: Erasing IMU calibration from EEPROM...");
-    EEPROM.write(0, 0xFF); // Invalidate magic number
-    EEPROM.commit();
+void MPU9250_HAL::eraseCalibration(CalibEraseType type) {
+    if (type == CalibEraseType::ALL) {
+        DEBUG_PRINTLN_F("BOOT: Erasing ALL IMU calibration from EEPROM...");
+        EEPROM.write(0, 0xFF); // Invalidate magic number
+        EEPROM.commit();
+        return;
+    }
+
+    // For partial erases, we MUST have existing valid data to preserve the other part
+    if (!hasCalibrationData()) {
+        DEBUG_PRINTLN_F("BOOT: Partial erase requested but no valid data exists. Skipping.");
+        return;
+    }
+
+    // 1. Load the valid totals from EEPROM into the _mpu object
+    loadCalibration(false); 
+
+    if (type == CalibEraseType::ACCEL_GYRO) {
+        DEBUG_PRINTLN_F("BOOT: Erasing Accel/Gyro calibration ONLY...");
+        _mpu.setAccBias(0, 0, 0);
+        _mpu.setGyroBias(0, 0, 0);
+    } 
+    else if (type == CalibEraseType::MAG) {
+        DEBUG_PRINTLN_F("BOOT: Erasing Magnetometer calibration ONLY...");
+        _mpu.setMagBias(0, 0, 0);
+        _mpu.setMagScale(1.0f, 1.0f, 1.0f);
+    }
+
+    // 2. Commit the new hybrid state (with selected parts zeroed) back to EEPROM
+    // Note: This keeps the CALIBRATION_MAGIC intact so the remaining part is still valid.
+    saveCalibration(true);
 }
 
 /**
@@ -248,13 +447,13 @@ void MPU9250_HAL::collectBiasErrors(int samples, float result_accel_g[3], float 
         prev_time_micros = micros(); 
 
         if (update()) { 
-            accel_sum[0] += _mpu.getAccX(); 
-            accel_sum[1] += _mpu.getAccY(); 
-            accel_sum[2] += _mpu.getAccZ(); 
+            accel_sum[0] += getAccX(); 
+            accel_sum[1] += getAccY(); 
+            accel_sum[2] += getAccZ(); 
             
-            gyro_sum[0] += _mpu.getGyroX(); 
-            gyro_sum[1] += _mpu.getGyroY(); 
-            gyro_sum[2] += _mpu.getGyroZ(); 
+            gyro_sum[0] += (getGyroX_rads() * RAD_TO_DEG); 
+            gyro_sum[1] += (getGyroY_rads() * RAD_TO_DEG); 
+            gyro_sum[2] += (getGyroZ_rads() * RAD_TO_DEG); 
             
             if (physicalZAxisDown) {
                 accel_sum[2] += 1.0f; // Sensor sees -1g, error is (Reading - (-1g)) = Reading + 1
@@ -301,6 +500,7 @@ bool MPU9250_HAL::adjustCalibrationIteratively(int samples_per_iteration, bool p
         float error_accel_g[3], error_gyro_dps[3];
 
         // Match Legacy: Full device re-init to clear hardware buffers and registers
+        forceBypass();
         if (!_mpu.setup(_i2cAddr, calibFineTuneConfig)) {
              DEBUG_PRINTLN_F("ERROR: HW Reset failed during fine-tuning.");
              return false;
@@ -345,12 +545,12 @@ bool MPU9250_HAL::adjustCalibrationIteratively(int samples_per_iteration, bool p
         _mpu.setAccBias(
             current_acc[0] + (error_accel_g[0] * 16384.0f) * Kp_accel,
             current_acc[1] + (error_accel_g[1] * 16384.0f) * Kp_accel,
-            current_acc[2] + (error_accel_g[2] * 16384.0f) * Kp_accel
+            current_acc[2] - (error_accel_g[2] * 16384.0f) * Kp_accel
         );
         _mpu.setGyroBias(
             current_gyro[0] + (error_gyro_dps[0] * 131.0f) * Kp_gyro,
             current_gyro[1] + (error_gyro_dps[1] * 131.0f) * Kp_gyro,
-            current_gyro[2] + (error_gyro_dps[2] * 131.0f) * Kp_gyro
+            current_gyro[2] - (error_gyro_dps[2] * 131.0f) * Kp_gyro
         );
 
         saveCalibration(false); 
@@ -395,7 +595,7 @@ void MPU9250_HAL::runFullCalibration(bool printDebug, bool performFineTuning, bo
     if (performFineTuning) {
         DEBUG_PRINTLN_F("\n--- [STEP 3/3] ITERATIVE FINE TUNING ---");
         DEBUG_PRINTLN_F("Keep STILL again for high-precision bias tracking...");
-        delay(2000);
+        delay(3000);
         float accel_tol_g = CALIBRATION_ACCEL_TOL_G;
         float gyro_tol_dps = CALIBRATION_GYRO_TOL_DPS;
         adjustCalibrationIteratively(50, true, accel_tol_g, gyro_tol_dps, CALIBRATION_MAX_ITERATIONS, physicalZAxisDown);
