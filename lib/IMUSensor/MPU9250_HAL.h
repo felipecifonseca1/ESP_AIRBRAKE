@@ -47,12 +47,19 @@ public:
     // If HIL is active, we bypass the physical mounting flip so the simulation is detached.
     // NOTE: If physicalZAxisDown is true, the sensor is upside down natively (reads -1g at rest).
     // We normalize to Logical Z-Up (+1g at rest) for the filters.
-    float getAccX() const override { return _mpu.getAccX(); } 
-    float getAccY() const override { return PHYSICAL_Z_AXIS_DOWN ? -_mpu.getAccY() : _mpu.getAccY(); }
-    float getAccZ() const override { return PHYSICAL_Z_AXIS_DOWN ? -_mpu.getAccZ() : _mpu.getAccZ(); } 
+    float getAccX() const override { return PHYSICAL_Z_AXIS_DOWN ? -_mpu.getAccX() : _mpu.getAccX(); } 
+    float getAccY() const override { return _mpu.getAccY(); }
+    float getAccZ() const override { 
+        float acc = _mpu.getAccZ(); 
+        if (HIL_MODE_ACTIVE) {
+            return PHYSICAL_Z_AXIS_DOWN ? -acc : acc; // HIL bypasses lib-flip, so apply it here
+        } else {
+            return acc; // Real-mode library already performed the flip natively
+        }
+    } 
 
-    float getGyroX_rads() const override { return _mpu.getGyroX() * DEG_TO_RAD; }
-    float getGyroY_rads() const override { return PHYSICAL_Z_AXIS_DOWN ? -(_mpu.getGyroY() * DEG_TO_RAD) : _mpu.getGyroY() * DEG_TO_RAD; }
+    float getGyroX_rads() const override { return PHYSICAL_Z_AXIS_DOWN ? -(_mpu.getGyroX() * DEG_TO_RAD) : _mpu.getGyroX() * DEG_TO_RAD; }
+    float getGyroY_rads() const override { return _mpu.getGyroY() * DEG_TO_RAD; }
     float getGyroZ_rads() const override { return PHYSICAL_Z_AXIS_DOWN ? -(_mpu.getGyroZ() * DEG_TO_RAD) : _mpu.getGyroZ() * DEG_TO_RAD; }
 
     // Magnetometer Alignment (AK8963 vs MPU-9250 frame)

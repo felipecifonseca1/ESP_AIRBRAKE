@@ -42,24 +42,20 @@ void AttitudeEstimator::update(float dt, bool ignoreAccel) {
         ignoreAccel = true;
     }
 
-    float gx_dps = _imu->getGyroX_rads() * RAD_TO_DEG;
-    float gy_dps = _imu->getGyroY_rads() * RAD_TO_DEG;
-    float gz_dps = _imu->getGyroZ_rads() * RAD_TO_DEG;
+    float gx = _imu->getGyroX_rads();
+    float gy = _imu->getGyroY_rads();
+    float gz = _imu->getGyroZ_rads();
 
-    // Store transformed gyro values
-    _transformedGyroX = gx_dps;
-    _transformedGyroY = gy_dps;
-    _transformedGyroZ = gz_dps;
+    // Apply Gyro Cutoff (convert threshold to rad/s for comparison)
+    float cutoff_rads = ATTITUDE_GYRO_CUTOFF_DPS * DEG_TO_RAD;
+    if (abs(gx) < cutoff_rads) gx = 0.0f;
+    if (abs(gy) < cutoff_rads) gy = 0.0f;
+    if (abs(gz) < cutoff_rads) gz = 0.0f;
 
-    // Apply Gyro Cutoff to ignore stationary vibration/noise
-    if (abs(gx_dps) < ATTITUDE_GYRO_CUTOFF_DPS) gx_dps = 0.0f;
-    if (abs(gy_dps) < ATTITUDE_GYRO_CUTOFF_DPS) gy_dps = 0.0f;
-    if (abs(gz_dps) < ATTITUDE_GYRO_CUTOFF_DPS) gz_dps = 0.0f;
-    
-    // Convert back to rad/s for the filter
-    float gx = gx_dps * DEG_TO_RAD;
-    float gy = gy_dps * DEG_TO_RAD;
-    float gz = gz_dps * DEG_TO_RAD;
+    // Store transformed gyro values for telemetry (in DPS for easier plotting)
+    _transformedGyroX = gx * RAD_TO_DEG;
+    _transformedGyroY = gy * RAD_TO_DEG;
+    _transformedGyroZ = gz * RAD_TO_DEG;
 
     float mx = 0.0f;
     float my = 0.0f;

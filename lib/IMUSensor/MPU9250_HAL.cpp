@@ -92,7 +92,10 @@ void MPU9250_HAL::injectData(float ax, float ay, float az, float gx, float gy, f
     // We use the Ts from Config_voo.h and assume motor_on=false for the filters during injection
     // Update internal MPU object so that raw getters return HIL data
     // We pass Gs directly because MPU9250 library getters return the stored 'a' values.
-    _mpu.update(Ts, false, false, ax, ay, az, gx, gy, gz, mx, my, mz);
+    // The library expects Gyro in DPS, but HIL data is in Rad/s.
+    // NOTE: This parameterized update bypasses the library's internal hardware bias (error_in_g), 
+    // so we pass simulation data directly.
+    _mpu.update(Ts, false, false, ax, ay, az, gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, mx, my, mz);
 }
 
 /**
@@ -174,38 +177,37 @@ void MPU9250_HAL::calibrateMagVisual() {
     uint32_t lastPrint = 0;
     
     while (millis() - startTime < 30000) {
-        _mpu.update_mag(); 
-        
-        float mx = _mpu.getMagX();
-        float my = _mpu.getMagY();
-        float mz = _mpu.getMagZ();
-        
-        // Skip junk zeros at startup
-        if (abs(mx) < 0.001f && abs(my) < 0.001f && abs(mz) < 0.001f) {
-            delay(10);
-            continue;
-        }
-
-        if (firstSample) {
-            m_min[0] = m_max[0] = mx;
-            m_min[1] = m_max[1] = my;
-            m_min[2] = m_max[2] = mz;
-            firstSample = false;
-        } else {
-            // Update Min/Max bounds
-            if (mx < m_min[0]) m_min[0] = mx;
-            if (mx > m_max[0]) m_max[0] = mx;
-            if (my < m_min[1]) m_min[1] = my;
-            if (my > m_max[1]) m_max[1] = my;
-            if (mz < m_min[2]) m_min[2] = mz;
-            if (mz > m_max[2]) m_max[2] = mz;
+        if (_mpu.update_mag()) { 
+            float mx = _mpu.getMagX();
+            float my = _mpu.getMagY();
+            float mz = _mpu.getMagZ();
+            
+            // Skip junk zeros at startup
+            if (abs(mx) < 0.001f && abs(my) < 0.001f && abs(mz) < 0.001f) {
+                // Not a valid sample
+            } else {
+                if (firstSample) {
+                    m_min[0] = m_max[0] = mx;
+                    m_min[1] = m_max[1] = my;
+                    m_min[2] = m_max[2] = mz;
+                    firstSample = false;
+                } else {
+                    // Update Min/Max bounds
+                    if (mx < m_min[0]) m_min[0] = mx;
+                    if (mx > m_max[0]) m_max[0] = mx;
+                    if (my < m_min[1]) m_min[1] = my;
+                    if (my > m_max[1]) m_max[1] = my;
+                    if (mz < m_min[2]) m_min[2] = mz;
+                    if (mz > m_max[2]) m_max[2] = mz;
+                }
+            }
         }
 
         if (millis() - lastPrint > 500) { // Slower print for S3 stability
             int progress = (int)((millis() - startTime) * 100 / 30000);
             DEBUG_PRINT_F("P:"); DEBUG_PRINT(progress); DEBUG_PRINT_F("% | ");
             if (firstSample) {
-                DEBUG_PRINTLN_F("Searching for Magnetometer signal...");
+                DEBUG_PRINTLN_F("Searching for Magnetometer signal (Spin it!)...");
             } else {
                 DEBUG_PRINT_F("X("); DEBUG_PRINT((int)m_min[0]); DEBUG_PRINT_F(","); DEBUG_PRINT((int)m_max[0]);
                 DEBUG_PRINT_F(") Y("); DEBUG_PRINT((int)m_min[1]); DEBUG_PRINT_F(","); DEBUG_PRINT((int)m_max[1]);
@@ -214,7 +216,7 @@ void MPU9250_HAL::calibrateMagVisual() {
             }
             lastPrint = millis();
         }
-        delay(20); // 50Hz polling is safer for standard I2C bypass
+        // Yield for system stability, but no fixed delay so we don't miss samples (100Hz ODR)
         yield();
     }
 

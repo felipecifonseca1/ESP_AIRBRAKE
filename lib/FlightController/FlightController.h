@@ -199,6 +199,8 @@ private:
   // Launch Detection Constants
   const float _accelLimitLaunch = LAUNCH_ACCEL_THRESHOLD_G * G_GRAVITATIONAL_CONSTANT;
   const float _heightLimitLaunch = LAUNCH_HEIGHT_THRESHOLD_M;
+  const uint8_t _launchConfirmationCount = LAUNCH_CONFIRMATION_COUNT;
+  int _launchCounter = 0;
 
   // Burnout Detection
   static const int _burnoutWindowSize = BURNOUT_WINDOW_SIZE;

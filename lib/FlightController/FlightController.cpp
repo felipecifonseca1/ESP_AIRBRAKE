@@ -147,16 +147,16 @@ bool FlightController::runStateEstimator() {
     _barometricPressure = hilData.barometricPressure_Pa;
 
     if (hilData.hasFullIMU) {      // Extract basic HIL variables
-      float ax = hilData.accX_ms2 / G_GRAVITATIONAL_CONSTANT;
-      float ay = hilData.accY_ms2 / G_GRAVITATIONAL_CONSTANT;
-      float az = hilData.accZ_ms2 / G_GRAVITATIONAL_CONSTANT;
+      // INJECT: 1:1 HIL Data (Assuming standard Z-longitudinal sim frame)
+      float ax = hilData.accX_ms2 / G_GRAVITATIONAL_CONSTANT; 
+      float ay = hilData.accY_ms2 / G_GRAVITATIONAL_CONSTANT; 
+      float az = hilData.accZ_ms2 / G_GRAVITATIONAL_CONSTANT; 
       
-      // DataManager now provides gyro in rad/s but controller expects rad/s for injection too
       float gx = hilData.gyroX_rads;
       float gy = hilData.gyroY_rads;
       float gz = hilData.gyroZ_rads;
 
-      float mx = USE_MAGNETOMETER ? hilData.magX_T : 0.0f; // DataManager now provides Tesla
+      float mx = USE_MAGNETOMETER ? hilData.magX_T : 0.0f; 
       float my = USE_MAGNETOMETER ? hilData.magY_T : 0.0f;
       float mz = USE_MAGNETOMETER ? hilData.magZ_T : 0.0f;
 
@@ -434,6 +434,7 @@ void FlightController::healthCheckLoop() {
       DataManager::getInstance().setDecimationFactor(10);
       _stateEntryTime = millis();
       _healthCheckCount = 0;
+      _launchCounter = 0; // Reset launch counter
     }
   } else {
     DEBUG_PRINTLN_F("ERROR: Component health failure detected by checkFlightSystemHealth()!");
@@ -608,6 +609,7 @@ void FlightController::forceState(FlightState newState) {
       _attitudeEstimator->setFilterBeta(10.0f);
       _R_kf(1, 1) = 0.000001f;
       _healthCheckCount = 0;
+      _launchCounter = 0; // Reset launch counter
     }
   }
 }
@@ -761,9 +763,17 @@ bool FlightController::checkFlightSystemHealth(float filteredAltitude,
  */
 bool FlightController::detectLaunch(float verticalAcceleration,
                                     float filteredAltitude) {
-  if (abs(verticalAcceleration) > _accelLimitLaunch ||
-      filteredAltitude > _heightLimitLaunch) {
-    DEBUG_PRINTLN_F("FLIGHT_LOGIC: Launch detected!");
+  // REQUIREMENT: Positive vertical acceleration (upward) or altitude threshold
+  // Only trigger on positive vertical acceleration to prevent downward shocks from falsely triggering lift-off.
+  if (verticalAcceleration > _accelLimitLaunch ||filteredAltitude > _heightLimitLaunch) {
+    _launchCounter++;
+  } else {
+    _launchCounter = 0;
+  }
+
+  // Confirm launch with multiple consecutive readings 
+  if (_launchCounter >= _launchConfirmationCount) {
+    DEBUG_PRINTLN_F("FLIGHT_LOGIC: Launch confirmed!");
     return true;
   }
   return false;
