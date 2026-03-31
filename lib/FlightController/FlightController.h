@@ -9,8 +9,7 @@
 #include <ESP32Servo.h>
 #include "BarometricSensor.h"
 #include "AttitudeEstimator.h"
-
-
+#include "NavMEKF.h"
 
 // --- Data Structures ---
 struct RawFlightData;
@@ -256,6 +255,7 @@ private:
 
   // --- Kalman Filter & Estimator State ---
   KalmanFilter _kf;
+  NavMEKF _navMekf;
   Eigen::Matrix<float, 2, 2> _F_kf;
   Eigen::Matrix<float, 2, 1> _G_kf;
   Eigen::Matrix<float, 2, 2> _H_kf;

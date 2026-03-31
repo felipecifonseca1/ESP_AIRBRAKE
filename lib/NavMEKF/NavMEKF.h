@@ -1,5 +1,5 @@
-#ifndef MEKF_H
-#define MEKF_H
+#ifndef NAV_MEKF_H
+#define NAV_MEKF_H
 
 #include <Arduino.h>
 #include <ArduinoEigenDense.h>
@@ -7,7 +7,7 @@
 using namespace Eigen;
 
 /**
- * @class MEKF
+ * @class NavMEKF
  * @brief 15-State Multiplicative Extended Kalman Filter
  * @details State Vector Ordering:
  * [0:3]   Position Error (dp)
@@ -16,10 +16,10 @@ using namespace Eigen;
  * [9:12]  Accelerometer Bias (dab)
  * [12:15] Gyroscope Bias (dwb)
  */
-class MEKF {
+class NavMEKF {
 public:
-    MEKF();
-    ~MEKF() = default;
+    NavMEKF();
+    ~NavMEKF() = default;
 
     /**
      * @brief Initializes the filter matrices
@@ -40,6 +40,14 @@ public:
     void predict(const Matrix<float, 3, 1>& gyro_meas, 
                  const Matrix<float, 3, 1>& acc_meas, 
                  float dt);
+
+    /**
+     * @brief Accelerometer Update (3D Gravity Fusion)
+     * @param acc_meas Raw or aligned accelerometer reading [x, y, z] (G's)
+     * @param R_acc Measurement noise covariance (3x3)
+     */
+    void updateAccel(const Matrix<float, 3, 1>& acc_meas, 
+                     const Matrix<float, 3, 3>& R_acc);
 
     /**
      * @brief Barometer Update (1D Z-Position)
@@ -96,13 +104,22 @@ private:
     static constexpr float _G_GRAVITY = 9.80665f;
 
     // Mathematical Helpers
-    Matrix<float, 15, 15> process_covariance(float dt);
+    void compute_process_covariance(float dt);
     void injectErrorState(const Matrix<float, 15, 1>& error_state);
     
     Matrix<float, 3, 3> skewSymmetric(const Matrix<float, 3, 1>& v) const;
     Matrix<float, 4, 1> quatMultiply(const Matrix<float, 4, 1>& q1, const Matrix<float, 4, 1>& q2) const;
     Matrix<float, 3, 3> quatToMatrix(const Matrix<float, 4, 1>& q) const;
     Matrix<float, 3, 1> rotateInverse(const Matrix<float, 4, 1>& q, const Matrix<float, 3, 1>& v) const;
+
+    // --- Scratch Matrices (Pre-allocated to prevent Stack Overflow) ---
+    Matrix<float, 15, 15> _I15;
+    Matrix<float, 15, 15> _F;
+    Matrix<float, 15, 15> _Q;
+    Matrix<float, 15, 15> _temp15x15;
+    Matrix<float, 15, 1>  _K15x1;
+    Matrix<float, 15, 3>  _K15x3;
+    Matrix<float, 15, 6>  _K15x6;
 };
 
-#endif // MEKF_H
+#endif // NAV_MEKF_H

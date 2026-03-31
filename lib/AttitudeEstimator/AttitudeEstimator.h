@@ -15,7 +15,9 @@ enum class AttitudeFilterSel {
     MAHONY,   ///< Proportional-Integral feedback filter
     EKF,      ///!Not implemented yet: Extended Kalman Filter 
     MEKF,     ///< Multiplicative Extended Kalman Filter
+    NAV_MEKF, ///< 15-State Navigation MEKF
 };
+
 
 /**
  * @class AttitudeEstimator
@@ -47,6 +49,12 @@ class AttitudeEstimator {
         void selectFilter(AttitudeFilterSel sel);
 
         /**
+        * @brief Gets the currently selected orientation filter.
+        * @return The currently selected AttitudeFilterSel.
+        */
+        AttitudeFilterSel getCurrentFilter() const { return _filterSel; }
+
+        /**
         * @brief Enable or disable the zeta-based drift learning (Madgwick only).
         * @param enabled True to enable.
         */
@@ -60,6 +68,12 @@ class AttitudeEstimator {
 
         void resetOrientation();
         void resetEstimatorState();
+
+        /**
+         * @brief Manually sets the internal quaternion.
+         * @details Useful when an external filter (like NavMEKF) provides the orientation.
+         */
+        void setQuaternion(float w, float x, float y, float z);
 
         // --- Orientation Getters ---
         float getRoll() const;  ///< Returns Roll in degrees [-180, 180]
@@ -110,6 +124,8 @@ class AttitudeEstimator {
         * @param weight [0.0 to 1.0] A lower value (e.g., 0.05) prevents tilt oscillation.
         */
         void setMagnetometerWeight(float weight);
+        bool getUseMagnetometer() const { return _useMagnetometer; }
+        void getMagneticReference(float &mx, float &my, float &mz) const { mx = _mag_ref_x; my = _mag_ref_y; mz = _mag_ref_z; }
         /**
         * @brief Returns the underlying IMU sensor logic
         */

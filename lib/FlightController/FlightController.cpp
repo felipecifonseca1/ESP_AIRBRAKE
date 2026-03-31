@@ -77,6 +77,7 @@ void FlightController::setupController() {
     case AttitudeFilterSel::MAHONY:   DEBUG_PRINTLN_F("MAHONY"); break;
     case AttitudeFilterSel::EKF:      DEBUG_PRINTLN_F("EKF (FUTURE)"); break;
     case AttitudeFilterSel::MEKF:     DEBUG_PRINTLN_F("MEKF"); break;
+    case AttitudeFilterSel::NAV_MEKF: DEBUG_PRINTLN_F("NAV_MEKF"); break;
   }
 
   DEBUG_PRINTLN_F("Controller initialized.");
@@ -86,32 +87,43 @@ void FlightController::setupController() {
  * @brief Initializes the Kalman Filter matrices and parameters.
  */
 void FlightController::setupKalman() {
-  _F_kf << 1.0f, Ts, 0.0f, 1.0f;
-  _G_kf << 0.5 * Ts * Ts, Ts;
-  _H_kf << 1, 0, 0, 1; // ZUKF velocity
+  if (_attitudeEstimator->getCurrentFilter() == AttitudeFilterSel::NAV_MEKF) {
+    Matrix<float, 3, 1> initPos(0, 0, 0); // Ground altitude is 0 AGL
+    Matrix<float, 3, 1> initVel(0, 0, 0);
+    // AttitudeEstimator initializes orientation from gravity in setup, we can pull the quat
+    Matrix<float, 4, 1> initQuat = { _attitudeEstimator->getQuaternionW(), _attitudeEstimator->getQuaternionX(), _attitudeEstimator->getQuaternionY(), _attitudeEstimator->getQuaternionZ() };
+    
+    // --- TUNING: Tighter Gyro and Accel process noise for less erratic behavior ---
+    _navMekf.init(initPos, initVel, initQuat, 0.1f, 1e-4f, 1e-6f, 5e-3f, 1e-5f);
+    DEBUG_PRINTLN_F("FlightController: NavMEKF initialized.");
+  } else {
+    _F_kf << 1.0f, Ts, 0.0f, 1.0f;
+    _G_kf << 0.5 * Ts * Ts, Ts;
+    _H_kf << 1, 0, 0, 1; // ZUKF velocity
 
-  float var_proc_pos = KALMAN_VAR_PROC_POS;
-  float var_proc_vel = KALMAN_VAR_PROC_VEL;
-  _Q_kf << var_proc_pos * (Ts * Ts * Ts * Ts) / 4.0,
-      var_proc_pos * (Ts * Ts * Ts) / 2, var_proc_pos * (Ts * Ts * Ts) / 2,
-      var_proc_vel * Ts * Ts;
+    float var_proc_pos = KALMAN_VAR_PROC_POS;
+    float var_proc_vel = KALMAN_VAR_PROC_VEL;
+    _Q_kf << var_proc_pos * (Ts * Ts * Ts * Ts) / 4.0,
+        var_proc_pos * (Ts * Ts * Ts) / 2, var_proc_pos * (Ts * Ts * Ts) / 2,
+        var_proc_vel * Ts * Ts;
 
-  float var_med_alt =
-      KALMAN_VAR_MEAS_ALT; // Standard variance for altitude measurement
-  float var_zupt_vel =
-      KALMAN_VAR_ZUPT_VEL; // Very low variance for ZUPT velocity measurement
+    float var_med_alt =
+        KALMAN_VAR_MEAS_ALT; // Standard variance for altitude measurement
+    float var_zupt_vel =
+        KALMAN_VAR_ZUPT_VEL; // Very low variance for ZUPT velocity measurement
 
-  _R_kf << var_med_alt, 0, 0, var_zupt_vel;
+    _R_kf << var_med_alt, 0, 0, var_zupt_vel;
 
-  _P0_kf << 1, 0, // Altitude uncertainty
-      0, 1;       // Velocity uncertainty
+    _P0_kf << 1, 0, // Altitude uncertainty
+        0, 1;       // Velocity uncertainty
 
-  _X0_kf << 0,
-      0; // AGL altitude and vertical speed initial estimates
+    _X0_kf << 0,
+        0; // AGL altitude and vertical speed initial estimates
 
-  _kf.init(_F_kf, _G_kf, _H_kf, _Q_kf, _R_kf, _P0_kf, _X0_kf);
-  DEBUG_PRINTLN_F(
-      "FlightController: Kalman filter initialized internal estimation.");
+    _kf.init(_F_kf, _G_kf, _H_kf, _Q_kf, _R_kf, _P0_kf, _X0_kf);
+    DEBUG_PRINTLN_F(
+        "FlightController: Kalman filter initialized internal estimation.");
+  }
 }
 
 /**
@@ -122,6 +134,7 @@ bool FlightController::runStateEstimator() {
   uint32_t start_us = micros();
   _diagnostics.flightState = (uint8_t)_flightState;
   uint32_t step_us;
+  float filter_dt = Ts;
   bool motor_on = (_flightState == FlightState::MOTOR_ON);
 
   RawFlightData data;
@@ -164,10 +177,6 @@ bool FlightController::runStateEstimator() {
       data.timestamp = (uint32_t)(hilData.time_s * 1000.0f);
 
       _attitudeEstimator->getIMU()->injectData(ax, ay, az, gx, gy, gz, mx, my, mz);
-      _attitudeEstimator->update(Ts, motor_on);
-
-      _tilt = _attitudeEstimator->getTilt();
-      _netVerticalAcceleration = _attitudeEstimator->getNetVerticalAcceleration();
     } else {
       _netVerticalAcceleration = hilData.netVerticalAcceleration_ms2;
       _tilt = 90 - hilData.tilt;
@@ -189,6 +198,7 @@ bool FlightController::runStateEstimator() {
         dt_actual = Ts; // Guard against first run or massive stalls
     }
     _lastEstimatorLoopUs = nowUs;
+    filter_dt = dt_actual;
 
     _attitudeEstimator->getIMU()->update(dt_actual);
     _barometricPressure = baro->getPressurePa();
@@ -202,40 +212,111 @@ bool FlightController::runStateEstimator() {
     step_us = micros();
 
 
-    // Set beta based on flight phase if not on pad
     if (_flightState == FlightState::MOTOR_ON) {
         _attitudeEstimator->setFilterBeta(0.1f); // Smooth during thrust
     }
-
-    _attitudeEstimator->update(dt_actual, motor_on);
-    _diagnostics.imuFilter_us = micros() - step_us;
-
-    step_us = micros();
-    _netVerticalAcceleration = _attitudeEstimator->getNetVerticalAcceleration();
-    _tilt = _attitudeEstimator->getTilt();
-    _diagnostics.navCalc_us = micros() - step_us;
   }
 
-  // --- Kalman Filter Execution ---
-  Eigen::Matrix<float, 1, 1> U_kf;
-  U_kf << _netVerticalAcceleration;
-  _kf.Predict(U_kf);
-
+  // --- Filter and State Estimation Execution ---
+  // --- Sensor Transformation and Preparation ---
+  // We run the AttitudeEstimator update first to populate aligned sensor data,
+  // but its internal filter (Madgwick/Mahony) will skip execution if currentFilter == NAV_MEKF.
+  _attitudeEstimator->update(filter_dt, motor_on);
+  
+  AttitudeFilterSel currentFilter = _attitudeEstimator->getCurrentFilter();
+  step_us = micros();
   float measuredAltitude_m = baro->altitudeFromPressure(_barometricPressure);
 
-  if (measuredAltitude_m > -9000.0f) {
-    Eigen::Matrix<float, 2, 1> Z_kf;
-    Z_kf << measuredAltitude_m, 0.0f; // Zero velocity measurement for ZUKF
-    _kf.Update(Z_kf, _R_kf);
-  } else {
-    DEBUG_PRINTLN_F(
-        "WARNING: Invalid altitude measurement. Kalman Update skipped.");
-  }
+  if (currentFilter == AttitudeFilterSel::NAV_MEKF) {
+      // Use "Aligned" sensor data from the AttitudeEstimator to ensure frame consistency
+      Matrix<float, 3, 1> gyro(_attitudeEstimator->getTransformedGyroX() * DEG_TO_RAD, 
+                               _attitudeEstimator->getTransformedGyroY() * DEG_TO_RAD, 
+                               _attitudeEstimator->getTransformedGyroZ() * DEG_TO_RAD);
+      
+      Matrix<float, 3, 1> acc(_attitudeEstimator->getTransformedAccX() * G_GRAVITATIONAL_CONSTANT, 
+                              _attitudeEstimator->getTransformedAccY() * G_GRAVITATIONAL_CONSTANT, 
+                              _attitudeEstimator->getTransformedAccZ() * G_GRAVITATIONAL_CONSTANT);
+      
+      // 1. Prediction (IMU Integration)
+      _navMekf.predict(gyro, acc, filter_dt);
 
-  // Get the posteriori state estimate
-  Matrix<float, 2, 1> stateEstimate = _kf.getPosterioriState();
-  _filteredAltitude = stateEstimate(0, 0);
-  _filteredVerticalVelocity = stateEstimate(1, 0);
+      // 2. Accelerometer Update (Gravity Fusion / Leveling)
+      // Only fuse gravity if we are not under high dynamic acceleration (e.g., stationary on pad)
+      float acc_norm = acc.norm();
+      if (abs(acc_norm - G_GRAVITATIONAL_CONSTANT) < 2.0f) { // Allowing 0.2G deviation for leveling
+          Matrix<float, 3, 3> R_acc = Matrix<float, 3, 3>::Identity() * 1.0f;  
+          _navMekf.updateAccel(acc / G_GRAVITATIONAL_CONSTANT, R_acc);
+      }
+
+      // 3. Barometer Update
+      if (measuredAltitude_m > -9000.0f) {
+           _navMekf.updateBaro(measuredAltitude_m, KALMAN_VAR_MEAS_ALT);
+      }
+
+      // 4. Magnetometer Update
+      if (_attitudeEstimator->getUseMagnetometer()) {
+          IMUSensor* imu = _attitudeEstimator->getIMU();
+          // Align magnetometer to body frame (matches AK8963 rotation in AttitudeEstimator)
+          float mx = imu->getMagY(); 
+          float my = imu->getMagX(); 
+          float mz = imu->getMagZ();
+          
+          Matrix<float, 3, 1> mag_meas(mx, my, mz);
+          float ref_x, ref_y, ref_z;
+          _attitudeEstimator->getMagneticReference(ref_x, ref_y, ref_z);
+          Matrix<float, 3, 1> mag_ref(ref_x, ref_y, ref_z);
+          
+          Matrix<float, 3, 3> R_mag = Matrix<float, 3, 3>::Identity() * 5.0f; // Mag Covariance
+          _navMekf.updateMag(mag_meas, mag_ref, R_mag);
+      }
+
+      /* 
+      --- GPS Update Placeholder ---
+      If you have a GPS object:
+      if (gps->newPositionAvailable()) {
+          Matrix<float, 3, 1> gpsPos(gps->getPosX(), gps->getPosY(), gps->getPosZ());
+          Matrix<float, 3, 1> gpsVel(gps->getVelX(), gps->getVelY(), gps->getVelZ());
+          Matrix<float, 6, 6> R_gps = Matrix<float, 6, 6>::Identity() * 0.5f; // Adjust noise
+          _navMekf.updateGPS(gpsPos, gpsVel, R_gps);
+      }
+      */
+
+      // Sync state back to AttitudeEstimator for common math getters to work (tilt, netAccel)
+      Matrix<float, 4, 1> q = _navMekf.getQuaternion();
+      _attitudeEstimator->setQuaternion(q(0), q(1), q(2), q(3));
+      
+      _tilt = _attitudeEstimator->getTilt();
+      _netVerticalAcceleration = _attitudeEstimator->getNetVerticalAcceleration();
+      _filteredAltitude = _navMekf.getPosition()(2);
+      _filteredVerticalVelocity = _navMekf.getVelocity()(2);
+      
+      _diagnostics.imuFilter_us = micros() - step_us; // MEKF is the filter now
+  } else {
+      // Legacy Mode: Filter is already updated in the prep step above
+      _diagnostics.imuFilter_us = micros() - step_us;
+
+      _tilt = _attitudeEstimator->getTilt();
+      _netVerticalAcceleration = _attitudeEstimator->getNetVerticalAcceleration();
+
+      // Legacy Mode: 1D Kalman Filter (Altitude/Velocity)
+      step_us = micros();
+      Eigen::Matrix<float, 1, 1> U_kf;
+      U_kf << _netVerticalAcceleration;
+      _kf.Predict(U_kf);
+
+      if (measuredAltitude_m > -9000.0f) {
+        Eigen::Matrix<float, 2, 1> Z_kf;
+        Z_kf << measuredAltitude_m, 0.0f;
+        _kf.Update(Z_kf, _R_kf);
+      } else {
+        DEBUG_PRINTLN_F("WARNING: Invalid altitude measurement. Kalman Update skipped.");
+      }
+
+      Matrix<float, 2, 1> stateEstimate = _kf.getPosterioriState();
+      _filteredAltitude = stateEstimate(0, 0);
+      _filteredVerticalVelocity = stateEstimate(1, 0);
+  }
+  
   _diagnostics.kalmanUpdate_us = micros() - step_us;
 
   // --- Update Loop Diagnostics ---

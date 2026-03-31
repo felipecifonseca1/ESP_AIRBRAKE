@@ -63,8 +63,8 @@ constexpr float AIRBRAKE_REF_AREA_M2     = 0.02097f;   // Total cross-sectional 
 // SYSTEM OPERATIONAL SETTINGS
 // =========================================================================
 
-constexpr float Ts_ms                     = 20.0f;     // Control loop period [ms] (50Hz)
-constexpr float Ts                        = 0.020f;    // Control loop period [s]
+constexpr float Ts_ms                     = 10.0f;     // Control loop period [ms] 
+constexpr float Ts                        = 0.010f;    // Control loop period [s]
 constexpr float apoggeTargetAltitude_m    = 3254.0f;   // Target mission apogee [m]
 constexpr float maxTiltAngle              = 60.0f;     // Max safety tilt for actuation [deg]
 constexpr float NET_ACC_THRESHOLD         = 0.2f;      // Vertical noise floor [m/s^2]
@@ -74,7 +74,7 @@ constexpr bool runBusScan                 = false;     // Run I2C bus scan at st
 
 // --- IMU & Orientation ---
 constexpr bool PHYSICAL_Z_AXIS_DOWN       = true;     // IMU Mounting   : true: Z-Down | false: Z-Up
-constexpr bool USE_MAGNETOMETER           = true;      // Filter: Enable Mag for drift correction
+constexpr bool USE_MAGNETOMETER           = false;      // Filter: Enable Mag for drift correction
 constexpr float MAGNETOMETER_FUSION_WEIGHT = 0.01f;    // Mag Authority
 constexpr float ATTITUDE_GYRO_CUTOFF_DPS  = 0.00f;     // Gyro Deadband: Ignore rotations < this value [dps]
 
@@ -97,8 +97,9 @@ namespace AttitudeFilter {
     constexpr uint8_t MAHONY   = 2;
     constexpr uint8_t EKF      = 3;
     constexpr uint8_t MEKF     = 4;
+    constexpr uint8_t NAV_MEKF = 5;
 }
-constexpr uint8_t DEFAULT_ATTITUDE_FILTER = AttitudeFilter::MEKF;
+constexpr uint8_t DEFAULT_ATTITUDE_FILTER = AttitudeFilter::NAV_MEKF;
 
 namespace MagLocation {
     constexpr uint8_t CUSTOM        = 0;

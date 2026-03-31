@@ -91,6 +91,9 @@ void AttitudeEstimator::update(float dt, bool ignoreAccel) {
         case AttitudeFilterSel::EKF:
             updateEKF(ax, ay, az, gx, gy, gz, mx, my, mz, ignoreAccel);
             break;
+        case AttitudeFilterSel::NAV_MEKF:
+            // Handled externally in FlightController to allow 15-state fusion
+            break;
     }
 }
 
@@ -129,6 +132,17 @@ void AttitudeEstimator::resetOrientation() {
     // standardizes the data to Z-Up before it reaches the filter.
     _q[0] = 1.0f; _q[1] = 0.0f; _q[2] = 0.0f; _q[3] = 0.0f;
     _mekf.resetState();
+}
+
+/**
+ * @brief Manually sets the internal quaternion and normalizes it.
+ */
+void AttitudeEstimator::setQuaternion(float w, float x, float y, float z) {
+    _q[0] = w; _q[1] = x; _q[2] = y; _q[3] = z;
+    
+    // Normalize to prevent floating point drift
+    float recipNorm = 1.0f / sqrt(_q[0] * _q[0] + _q[1] * _q[1] + _q[2] * _q[2] + _q[3] * _q[3]);
+    _q[0] *= recipNorm; _q[1] *= recipNorm; _q[2] *= recipNorm; _q[3] *= recipNorm;
 }
 
 void AttitudeEstimator::resetEstimatorState() {

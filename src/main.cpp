@@ -372,7 +372,7 @@ void setup() {
   SystemUtils::completeInitialization(WDT_TIMEOUT_MS);
 
   // Launch High-Priority Flight Task on Core 1
-  xTaskCreatePinnedToCore(TaskFlightControl, "Flight", 8192, NULL, 5, NULL, 1);
+  xTaskCreatePinnedToCore(TaskFlightControl, "Flight", 16384, NULL, 5, NULL, 1);
 
   // Launch I/O Tasks on Core 0
   xTaskCreatePinnedToCore(TaskLogging, "Logging", 8192, NULL, 2, NULL, 0);
