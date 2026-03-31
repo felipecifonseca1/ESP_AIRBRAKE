@@ -83,10 +83,9 @@ public:
     Matrix<float, 3, 1> getGyroBias()   const { return _bias; }
 
     /** 
-     * @brief Resets state to identity or flipped orientation depending on mounting. 
-     * @param physicalZAxisDown If true, initializes with a 180-degree flip around the X-axis.
+     * @brief Resets state to identity.
      */
-    void resetState(bool physicalZAxisDown = false);
+    void resetState();
 
 private:
     // States

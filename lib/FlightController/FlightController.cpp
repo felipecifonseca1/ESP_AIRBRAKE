@@ -160,20 +160,14 @@ bool FlightController::runStateEstimator() {
       float my = USE_MAGNETOMETER ? hilData.magY_T : 0.0f;
       float mz = USE_MAGNETOMETER ? hilData.magZ_T : 0.0f;
 
-      // In HIL mode the sensor convention comes from the CSV file (HIL_Z_AXIS_DOWN),
-      // which may differ from the physical hardware mount (PHYSICAL_Z_AXIS_DOWN).
-      constexpr bool effectiveZDown = HIL_Z_AXIS_DOWN;
-
       // Assign sim-time to data row for correct log playback
       data.timestamp = (uint32_t)(hilData.time_s * 1000.0f);
 
-      // NOTE: sign flips are now handled entirely by the AttitudeEstimator
       _attitudeEstimator->getIMU()->injectData(ax, ay, az, gx, gy, gz, mx, my, mz);
+      _attitudeEstimator->update(Ts, motor_on);
 
-      _attitudeEstimator->update(Ts, motor_on, effectiveZDown);
-
-      _tilt = _attitudeEstimator->getTilt(effectiveZDown);
-      _netVerticalAcceleration = _attitudeEstimator->getNetVerticalAcceleration(effectiveZDown);
+      _tilt = _attitudeEstimator->getTilt();
+      _netVerticalAcceleration = _attitudeEstimator->getNetVerticalAcceleration();
     } else {
       _netVerticalAcceleration = hilData.netVerticalAcceleration_ms2;
       _tilt = 90 - hilData.tilt;
@@ -200,22 +194,25 @@ bool FlightController::runStateEstimator() {
     _barometricPressure = baro->getPressurePa();
     _diagnostics.sensorRead_us = micros() - step_us;
 
+    // Pad-level baseline tracking: Update ground pressure if not in flight
+    if (_flightState == FlightState::HEALTH_CHECK || _flightState == FlightState::WAIT_LAUNCH) {
+        baro->recalibrateGroundPressure(_barometricPressure);
+    }
+
     step_us = micros();
 
-    // If the sensor is mounted Z-Down, we should transform it into a virtual
-    // Z-Up frame so the filter math remains standard and numerically stable.
 
     // Set beta based on flight phase if not on pad
     if (_flightState == FlightState::MOTOR_ON) {
         _attitudeEstimator->setFilterBeta(0.1f); // Smooth during thrust
     }
 
-    _attitudeEstimator->update(dt_actual, motor_on, PHYSICAL_Z_AXIS_DOWN);
+    _attitudeEstimator->update(dt_actual, motor_on);
     _diagnostics.imuFilter_us = micros() - step_us;
 
     step_us = micros();
-    _netVerticalAcceleration = _attitudeEstimator->getNetVerticalAcceleration(PHYSICAL_Z_AXIS_DOWN);
-    _tilt = _attitudeEstimator->getTilt(PHYSICAL_Z_AXIS_DOWN);
+    _netVerticalAcceleration = _attitudeEstimator->getNetVerticalAcceleration();
+    _tilt = _attitudeEstimator->getTilt();
     _diagnostics.navCalc_us = micros() - step_us;
   }
 
@@ -419,8 +416,6 @@ void FlightController::healthCheckLoop() {
     hcPrintCtr = 0;
   }
 
-  baro->recalibrateGroundPressure(_barometricPressure);
-
   if (checkFlightSystemHealth(_filteredAltitude, _filteredVerticalVelocity)) {
     _healthCheckCount++;
     DEBUG_PRINT_F("Component health OK this iteration. Count: ");
@@ -451,8 +446,6 @@ void FlightController::healthCheckLoop() {
  * @brief Loop for WAIT_LAUNCH state. Monitors for launch acceleration.
  */
 void FlightController::waitLaunchLoop() {
-  baro->recalibrateGroundPressure(_barometricPressure);
-
   uint32_t timeOnPad = millis() - _stateEntryTime;
   if (timeOnPad > 5000) {
     _attitudeEstimator->setFilterBeta(0.05f); // Rock solid stable on pad
@@ -460,11 +453,9 @@ void FlightController::waitLaunchLoop() {
     _attitudeEstimator->setFilterBeta(10.0f); // Faster initial convergence (snaps to gravity)
   }
   if (detectLaunch(_netVerticalAcceleration, _filteredAltitude)) {
-    DEBUG_PRINTLN_F("LAUNCH DETECTED!");
 
     // System settings for flight
     _attitudeEstimator->setDriftLearning(false); // Disable drift learning on IMU after launch
-    DEBUG_PRINTLN_F("Transition: WAIT_LAUNCH -> MOTOR_ON");
     _R_kf(1, 1) = 1000000000.0f; // Set high variance on velocity measurement to ignore zero input during flight
     DataManager::getInstance().setDecimationFactor(1); // Save every 20ms during flight
 
@@ -480,7 +471,6 @@ void FlightController::waitLaunchLoop() {
 void FlightController::motorOnLoop() {
   unsigned long tempoDesdeLancamento = millis() - _launchDetectedTime;
   if (detectBurnout(_netVerticalAcceleration, tempoDesdeLancamento)) {
-    DEBUG_PRINTLN_F("BURNOUT DETECTED!");
     _attitudeEstimator->setFilterBeta(0.1f);
     _flightState = FlightState::BURNOUT;
     _stateEntryTime = millis();
@@ -493,8 +483,6 @@ void FlightController::motorOnLoop() {
 void FlightController::burnoutLoop() {
   // Check for airbrakes actuation window
   if (detectAirbrakesActuation(_filteredAltitude, _filteredVerticalVelocity)) {
-    DEBUG_PRINTLN_F(
-        "Appropriate speed detected, initiating airbrake actuation.");
     _flightState = FlightState::AIRBRAKE_DEPLOYMENT;
     _stateEntryTime = millis();
   }
@@ -525,7 +513,6 @@ void FlightController::airbrakeDeploymentLoop() {
 
   // Apogee Detection
   if (detectApogeeByRegression(_filteredAltitude, millis())) {
-    DEBUG_PRINTLN_F("APOGEE DETECTED!");
     _flightState = FlightState::APOGEE;
     _attitudeEstimator->setFilterBeta(1.0f);
     _stateEntryTime = millis();
@@ -1007,7 +994,7 @@ bool FlightController::detectLanding(float filteredVerticalVelocity,
  * @return Current tilt angle in degrees.
  */
 float FlightController::readCurrentTilt() {
-  return _attitudeEstimator->getTilt(PHYSICAL_Z_AXIS_DOWN);
+  return _attitudeEstimator->getTilt();
 }
 
 // --- Recovery System Implementation ---

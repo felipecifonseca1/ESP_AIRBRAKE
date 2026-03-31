@@ -13,7 +13,7 @@ enum class AttitudeFilterSel {
     NONE,     ///< Simple integration (High drift)
     MADGWICK, ///< optimized gradient descent filter
     MAHONY,   ///< Proportional-Integral feedback filter
-    EKF,      ///< Extended Kalman Filter (Reserved for future)
+    EKF,      ///!Not implemented yet: Extended Kalman Filter 
     MEKF,     ///< Multiplicative Extended Kalman Filter
 };
 
@@ -37,7 +37,7 @@ class AttitudeEstimator {
         * @param dt Delta time since the last update in seconds.
         * @param ignoreAccel If true, the accelerometer correction is skipped (Gyro-only integration).
         */
-        void update(float dt, bool ignoreAccel = false, bool physicalZAxisDown = false);
+        void update(float dt, bool ignoreAccel = false);
 
         // --- Configuration Getters & Setters ---
         /**
@@ -58,15 +58,7 @@ class AttitudeEstimator {
         */
         void setFilterBeta(float errorDegPerSec);
 
-        /**
-        * @brief Resets the internal orientation quaternion and clears drift biases.
-        * @param physicalZAxisDown If true, starts flipped 180deg (Z pointing down).
-        */
-        void resetOrientation(bool physicalZAxisDown = false);
-
-        /**
-         * @brief Resets the estimator state, including drift biases and integral terms.
-         */
+        void resetOrientation();
         void resetEstimatorState();
 
         // --- Orientation Getters ---
@@ -87,14 +79,14 @@ class AttitudeEstimator {
         * @param physicalZAxisDown True if the IMU's Z-axis points towards the ground when upright.
         * @return Tilt angle in degrees [0° to 180°].
         */
-        float getTilt(bool unused = false) const;
+        float getTilt() const;
 
         /**
         * @brief Computes Z-axis acceleration in the Earth frame, with gravity removed.
         * @param isZDown True if the sensor is physically mounted Z-Down (subtracts -1G gravity instead of +1G).
         * @return Vertical acceleration in m/s^2.
         */
-        float getNetVerticalAcceleration(bool isZDown = false) const;
+        float getNetVerticalAcceleration() const;
 
         /**
          * @brief Returns the transformed Z-acceleration entering the filter (diagnostic).

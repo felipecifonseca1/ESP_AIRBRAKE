@@ -8,7 +8,7 @@ using namespace Eigen;
  * @details Initializes the nominal quaternion to identity and bias to zero.
  */
 MEKF::MEKF() {
-    resetState(false); // Default to identity (upright)
+    resetState(); // Default to identity (upright)
     
     // Default Process Noise (Gyro noise and bias drift)
     // 0.001 is much more stable for flight than Identity[1.0]
@@ -22,14 +22,9 @@ MEKF::MEKF() {
  * @brief Resets the internal state to initial values.
  * @param physicalZAxisDown If true, initializes with a 180-degree flip around the X-axis.
  */
-void MEKF::resetState(bool physicalZAxisDown) {
-    if (physicalZAxisDown) {
-        // Start with a 180 degree flip around X axis: q = [0, 1, 0, 0]
-        _quat << 0.0f, 1.0f, 0.0f, 0.0f;
-    } else {
-        // Standard identity: q = [1, 0, 0, 0]
-        _quat << 1.0f, 0.0f, 0.0f, 0.0f;
-    }
+void MEKF::resetState() {
+    // Standard identity: q = [1, 0, 0, 0]
+    _quat << 1.0f, 0.0f, 0.0f, 0.0f;
     _bias.setZero();
 }
 
@@ -41,7 +36,7 @@ void MEKF::resetState(bool physicalZAxisDown) {
 void MEKF::init(const Matrix<float, 6, 6>& Q_in, const Matrix<float, 6, 6>& P0_in) {
     _proc = Q_in;
     _cov  = P0_in;
-    resetState(false);
+    resetState();
 }
 
 void MEKF::setProcessNoise(float q_diagonal) {

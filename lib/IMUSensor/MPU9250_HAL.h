@@ -4,6 +4,7 @@
 #include <Wire.h>
 #include "IMUSensor.h"
 #include "MPU9250/MPU9250.h" 
+#include "Config_voo.h"
 
 /**
  * @class MPU9250_HAL
@@ -42,18 +43,23 @@ public:
     void calibrateMagVisual();
     bool isMagDataNew();
 
-    // --- Raw Data Getters ---
+    // --- Raw Data Getters (Standardized to Logical Z-Up Frame internally) ---
+    // If HIL is active, we bypass the physical mounting flip so the simulation is detached.
+    // NOTE: If physicalZAxisDown is true, the sensor is upside down natively (reads -1g at rest).
+    // We normalize to Logical Z-Up (+1g at rest) for the filters.
     float getAccX() const override { return _mpu.getAccX(); } 
-    float getAccY() const override { return _mpu.getAccY(); }
-    float getAccZ() const override { return -_mpu.getAccZ(); } // ! Fix to acceleration range Up Down (-1 ; 1) -->  (1  ; -1) 
+    float getAccY() const override { return PHYSICAL_Z_AXIS_DOWN ? -_mpu.getAccY() : _mpu.getAccY(); }
+    float getAccZ() const override { return PHYSICAL_Z_AXIS_DOWN ? -_mpu.getAccZ() : _mpu.getAccZ(); } 
 
     float getGyroX_rads() const override { return _mpu.getGyroX() * DEG_TO_RAD; }
-    float getGyroY_rads() const override { return _mpu.getGyroY() * DEG_TO_RAD; }
-    float getGyroZ_rads() const override { return -_mpu.getGyroZ() * DEG_TO_RAD; } //! Flipped to correct physical inversion
+    float getGyroY_rads() const override { return PHYSICAL_Z_AXIS_DOWN ? -(_mpu.getGyroY() * DEG_TO_RAD) : _mpu.getGyroY() * DEG_TO_RAD; }
+    float getGyroZ_rads() const override { return PHYSICAL_Z_AXIS_DOWN ? -(_mpu.getGyroZ() * DEG_TO_RAD) : _mpu.getGyroZ() * DEG_TO_RAD; }
 
-    float getMagX() const override { return _mpu.getMagX(); }
-    float getMagY() const override { return _mpu.getMagY(); }
-    float getMagZ() const override { return -_mpu.getMagZ(); } //! Flipped to correct physical inversion
+    // Magnetometer Alignment (AK8963 vs MPU-9250 frame)
+    // Standard (Upright): hx=my, hy=mx, hz=-mz. We flip Y/Z into logical Rocket Frame.
+    float getMagX() const override { return _mpu.getMagY(); }
+    float getMagY() const override { return PHYSICAL_Z_AXIS_DOWN ? -_mpu.getMagX() : _mpu.getMagX(); }
+    float getMagZ() const override { return PHYSICAL_Z_AXIS_DOWN ? _mpu.getMagZ() : -_mpu.getMagZ(); }
 
     float getTemperature() const override { return _mpu.getTemperature(); }
 

@@ -786,13 +786,6 @@ HILSimulationData DataManager::parseHILLine(String line) {
       data.magY_T = values[8] * 1000000.0f;
       data.magZ_T = values[9] * 1000000.0f;
 
-      // applying auto-sign correction for reversed RocketPy files
-      if (_hilReverseZ) {
-          data.accZ_ms2 = -data.accZ_ms2;
-          data.gyroY_rads = -data.gyroY_rads;
-          data.gyroZ_rads = -data.gyroZ_rads;
-      }
-
       data.barometricPressure_Pa = values[10];
     } 
     else if (numValues >= 23) {
@@ -883,30 +876,6 @@ bool DataManager::initHIL(const char *filename) {
         DEBUG_PRINTLN_F("HIL ERROR: Empty file or invalid first line.");
         _hilFile.close();
         return false;
-      }
-
-      // --- Orientation Guard & Auto-Sign Detection ---
-      if (_staticHILFrame.hasFullIMU) {
-        // [AUTO-DETECT] RocketPy-style ZDown files often have +9.8 stationary.
-        // But our filter treats Z-Down as -9.8 (flipped in update).
-        // If HIL_Z_AXIS_DOWN is true but the file starts POSITIVE, it's reversed.
-        _hilReverseZ = (HIL_Z_AXIS_DOWN && _staticHILFrame.accZ_ms2 > 5.0f);
-        
-        if (_hilReverseZ) {
-           DEBUG_PRINTLN_F("HIL: Reverse-Z convention detected for Z-Down file (+Stat). Autocoding Z-signs.");
-           // Apply detection to the static frame immediately
-           _staticHILFrame.accZ_ms2 = -_staticHILFrame.accZ_ms2;
-           _staticHILFrame.gyroY_rads = -_staticHILFrame.gyroY_rads;
-           _staticHILFrame.gyroZ_rads = -_staticHILFrame.gyroZ_rads;
-        }
-
-        bool csvActuallyZDown = (_staticHILFrame.accZ_ms2 < -5.0f);
-        if (csvActuallyZDown != HIL_Z_AXIS_DOWN) {
-          DEBUG_PRINTF(
-              "[HIL WARNING] Orientation mismatch! CSV:%s | Config:%s\n",
-              csvActuallyZDown ? "Z-DOWN" : "Z-UP",
-              HIL_Z_AXIS_DOWN ? "Z-DOWN" : "Z-UP");
-        }
       }
 
       // Forces gyro to zero to avoid drift

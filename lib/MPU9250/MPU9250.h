@@ -535,7 +535,7 @@ public:
         a[0] = (float)raw_acc_gyro_data[0] * acc_resolution;  // get actual g value, this depends on scale being set
         a[1] = (float)raw_acc_gyro_data[1] * acc_resolution;
         a[2] = (float)raw_acc_gyro_data[2] * acc_resolution;
-
+        
         a[2]-= error_in_g; // ! Fix to acceleration range Up Down (-1 ; 1) -->  (1  ; -1) 
         
         // Serial.print("Raw X: ");

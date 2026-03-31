@@ -99,14 +99,14 @@ void MPU9250_HAL::injectData(float ax, float ay, float az, float gx, float gy, f
  * @brief Trigger the library's internal accelerometer/gyroscope calibration.
  */
 void MPU9250_HAL::calibrateAccel() {
-    _mpu.calibrateAccelGyro(true); // Default to Z-Down for internal library calib
+    _mpu.calibrateAccelGyro(PHYSICAL_Z_AXIS_DOWN);
 }
 
 /**
  * @brief Trigger the library's internal accelerometer/gyroscope calibration.
  */
 void MPU9250_HAL::calibrateGyro() {
-    _mpu.calibrateAccelGyro(true);
+    _mpu.calibrateAccelGyro(PHYSICAL_Z_AXIS_DOWN);
 }
 
 /**
@@ -163,7 +163,9 @@ void MPU9250_HAL::calibrateMagVisual() {
     _mpu.setMagBias(0, 0, 0);
     _mpu.setMagScale(1, 1, 1);
 
-    float m_min[3], m_max[3];
+    // [-FLT_MAX, FLT_MAX] for clean initialization
+    float m_min[3] = {32767.0f, 32767.0f, 32767.0f};
+    float m_max[3] = {-32768.0f, -32768.0f, -32768.0f};
     bool firstSample = true;
     
     DEBUG_PRINTLN_F("CALIBRATING... SPIN THE ROCKET NOW (30s)!");
@@ -199,16 +201,20 @@ void MPU9250_HAL::calibrateMagVisual() {
             if (mz > m_max[2]) m_max[2] = mz;
         }
 
-        if (millis() - lastPrint > 200) {
-            int progress = (millis() - startTime) / 300;
+        if (millis() - lastPrint > 500) { // Slower print for S3 stability
+            int progress = (int)((millis() - startTime) * 100 / 30000);
             DEBUG_PRINT_F("P:"); DEBUG_PRINT(progress); DEBUG_PRINT_F("% | ");
-            DEBUG_PRINT_F("X("); DEBUG_PRINT((int)m_min[0]); DEBUG_PRINT_F(","); DEBUG_PRINT((int)m_max[0]);
-            DEBUG_PRINT_F(") Y("); DEBUG_PRINT((int)m_min[1]); DEBUG_PRINT_F(","); DEBUG_PRINT((int)m_max[1]);
-            DEBUG_PRINT_F(") Z("); DEBUG_PRINT((int)m_min[2]); DEBUG_PRINT_F(","); DEBUG_PRINT((int)m_max[2]);
-            DEBUG_PRINTLN_F(")");
+            if (firstSample) {
+                DEBUG_PRINTLN_F("Searching for Magnetometer signal...");
+            } else {
+                DEBUG_PRINT_F("X("); DEBUG_PRINT((int)m_min[0]); DEBUG_PRINT_F(","); DEBUG_PRINT((int)m_max[0]);
+                DEBUG_PRINT_F(") Y("); DEBUG_PRINT((int)m_min[1]); DEBUG_PRINT_F(","); DEBUG_PRINT((int)m_max[1]);
+                DEBUG_PRINT_F(") Z("); DEBUG_PRINT((int)m_min[2]); DEBUG_PRINT_F(","); DEBUG_PRINT((int)m_max[2]);
+                DEBUG_PRINTLN_F(")");
+            }
             lastPrint = millis();
         }
-        delay(10);
+        delay(20); // 50Hz polling is safer for standard I2C bypass
         yield();
     }
 
@@ -453,19 +459,17 @@ void MPU9250_HAL::collectBiasErrors(int samples, float result_accel_g[3], float 
         prev_time_micros = micros(); 
 
         if (update()) { 
-            accel_sum[0] += getAccX(); 
-            accel_sum[1] += getAccY(); 
-            accel_sum[2] += getAccZ(); 
+            accel_sum[0] += _mpu.getAccX(); 
+            accel_sum[1] += _mpu.getAccY(); 
+            accel_sum[2] += _mpu.getAccZ(); 
             
-            gyro_sum[0] += (getGyroX_rads() * RAD_TO_DEG); 
-            gyro_sum[1] += (getGyroY_rads() * RAD_TO_DEG); 
-            gyro_sum[2] += (getGyroZ_rads() * RAD_TO_DEG); 
+            gyro_sum[0] += _mpu.getGyroX(); 
+            gyro_sum[1] += _mpu.getGyroY(); 
+            gyro_sum[2] += _mpu.getGyroZ(); 
             
-            if (physicalZAxisDown) {
-                accel_sum[2] += 1.0f; // Sensor sees -1g, error is (Reading - (-1g)) = Reading + 1
-            } else {
-                accel_sum[2] -= 1.0f; // Sensor sees +1g, error is (Reading - 1g)
-            }
+            // Note: Calibration always targets the raw sensor's expected resting state.
+            // For stationary IMU, X=0, Y=0, Z=1g.
+            accel_sum[2] -= 1.0f; 
         } else {
             i--; 
             delay(1); 
@@ -551,12 +555,12 @@ bool MPU9250_HAL::adjustCalibrationIteratively(int samples_per_iteration, bool p
         _mpu.setAccBias(
             current_acc[0] + (error_accel_g[0] * 16384.0f) * Kp_accel,
             current_acc[1] + (error_accel_g[1] * 16384.0f) * Kp_accel,
-            current_acc[2] - (error_accel_g[2] * 16384.0f) * Kp_accel
+            current_acc[2] + (error_accel_g[2] * 16384.0f) * Kp_accel
         );
         _mpu.setGyroBias(
             current_gyro[0] + (error_gyro_dps[0] * 131.0f) * Kp_gyro,
             current_gyro[1] + (error_gyro_dps[1] * 131.0f) * Kp_gyro,
-            current_gyro[2] - (error_gyro_dps[2] * 131.0f) * Kp_gyro
+            current_gyro[2] + (error_gyro_dps[2] * 131.0f) * Kp_gyro
         );
 
         saveCalibration(false); 
@@ -582,7 +586,7 @@ void MPU9250_HAL::runFullCalibration(bool printDebug, bool performFineTuning, bo
     delay(2000);
 
     _mpu.verbose(printDebug);
-    _mpu.calibrateAccelGyro(physicalZAxisDown); // Combined library calib
+    _mpu.calibrateAccelGyro(physicalZAxisDown); // Calibrate to the physical mounting alignment
     _mpu.verbose(false);
 
     float base_acc[3] = {_mpu.getAccBiasX(), _mpu.getAccBiasY(), _mpu.getAccBiasZ()};

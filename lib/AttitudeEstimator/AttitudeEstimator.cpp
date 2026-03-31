@@ -24,7 +24,7 @@ AttitudeEstimator::AttitudeEstimator(IMUSensor* imu) : _imu(imu) {
  * @brief Main update loop. Pulls raw data from IMU and updates the active filter.
  * @param dt Time delta in seconds.
  */
-void AttitudeEstimator::update(float dt, bool ignoreAccel, bool physicalZAxisDown) {
+void AttitudeEstimator::update(float dt, bool ignoreAccel) {
     if (!_imu) return; 
     _deltaT = dt;
 
@@ -32,14 +32,6 @@ void AttitudeEstimator::update(float dt, bool ignoreAccel, bool physicalZAxisDow
     float ay = _imu->getAccY();
     float az = _imu->getAccZ();
     
-    // If physicalZAxisDown is true, it means the sensor is mounted 
-    // upside down relative to the rocket. We apply a 180-X flip to bring it 
-    // into the internal Z-Up frame (+1G gravity) that the filter expects.
-    if (physicalZAxisDown) {
-        // Rotation of 180 degrees around X: [x, -y, -z]
-        ay = -ay; az = -az;
-    }
-
     _transformedAccX = ax;
     _transformedAccY = ay;
     _transformedAccZ = az;
@@ -53,11 +45,6 @@ void AttitudeEstimator::update(float dt, bool ignoreAccel, bool physicalZAxisDow
     float gx_dps = _imu->getGyroX_rads() * RAD_TO_DEG;
     float gy_dps = _imu->getGyroY_rads() * RAD_TO_DEG;
     float gz_dps = _imu->getGyroZ_rads() * RAD_TO_DEG;
-
-    if (physicalZAxisDown) {
-        // Rotation of 180 degrees around X: [x, -y, -z]
-        gy_dps = -gy_dps; gz_dps = -gz_dps;
-    }
 
     // Store transformed gyro values
     _transformedGyroX = gx_dps;
@@ -88,11 +75,6 @@ void AttitudeEstimator::update(float dt, bool ignoreAccel, bool physicalZAxisDow
         mx = rawMagY;   // Align Mag Y to Accel X (Right)
         my = rawMagX;   // Align Mag X to Accel Y (Forward)
         mz = rawMagZ;   // Already flipped in HAL to be Up-positive
-
-        if (physicalZAxisDown) {
-            // Rotation of 180 degrees around X: [x, -y, -z]
-            my = -my; mz = -mz;
-        }
     }
 
     MPU9250_HAL* mpuHal = (MPU9250_HAL*)_imu;
@@ -144,21 +126,17 @@ void AttitudeEstimator::setFilterBeta(float errorDegPerSec) {
 
 /**
  * @brief Resets the internal orientation quaternion.
- * @param physicalZAxisDown If true, starts flipped 180deg (Z pointing down).
  */
-void AttitudeEstimator::resetOrientation(bool physicalZAxisDown) {
-    if (physicalZAxisDown) {
-        // Start with a 180 degree flip around X axis: q = [0, 1, 0, 0]
-        _q[0] = 0.0f; _q[1] = 1.0f; _q[2] = 0.0f; _q[3] = 0.0f;
-    } else {
-        // Standard identity: q = [1, 0, 0, 0]
-        _q[0] = 1.0f; _q[1] = 0.0f; _q[2] = 0.0f; _q[3] = 0.0f;
-    }
-    _mekf.resetState(physicalZAxisDown);
+void AttitudeEstimator::resetOrientation() {
+    // Standard Z-Up (Default): q = [1, 0, 0, 0]
+    // Even if physicalZAxisDown is true, we reset to Upright because the HAL
+    // standardizes the data to Z-Up before it reaches the filter.
+    _q[0] = 1.0f; _q[1] = 0.0f; _q[2] = 0.0f; _q[3] = 0.0f;
+    _mekf.resetState();
 }
 
 void AttitudeEstimator::resetEstimatorState() {
-    resetOrientation(PHYSICAL_Z_AXIS_DOWN);
+    resetOrientation();
     _w_bx = 0.0f; _w_by = 0.0f; _w_bz = 0.0f;
     _ix = 0.0f; _iy = 0.0f; _iz = 0.0f;
 }
@@ -206,18 +184,18 @@ float AttitudeEstimator::computeYaw() const {
  * @param physicalZAxisDown True if the IMU is mounted Z-axis pointing down.
  * @return Tilt angle in degrees [0-180].
  */
-float AttitudeEstimator::getTilt(bool unused) const {
+float AttitudeEstimator::getTilt() const {
     float qw = _q[0];
     float qx = _q[1];
     float qy = _q[2];
     float qz = _q[3];
 
     // Standard Z-Up "upward" vector projected into body: [2(q1q3 - q0q2), 2(q0q1 + q2q3), q0^2 - q1^2 - q2^2 + q3^2]
-    // The Z-component is cos(tilt).
     float cos_tilt = qw * qw - qx * qx - qy * qy + qz * qz;
     if (cos_tilt > 1.0f) cos_tilt = 1.0f;
     else if (cos_tilt < -1.0f) cos_tilt = -1.0f;
     
+    // We return standard tilt because data is already standardized in the HAL
     return acosf(cos_tilt) * RAD_TO_DEG;
 }
 
@@ -227,7 +205,7 @@ float AttitudeEstimator::getTilt(bool unused) const {
  *          to the world frame. Note: On pad, this should be close to 0.0.
  * @return Vertical acceleration in m/s^2.
  */
-float AttitudeEstimator::getNetVerticalAcceleration(bool isZDown) const {
+float AttitudeEstimator::getNetVerticalAcceleration() const {
     float qw = _q[0]; float qx = _q[1]; float qy = _q[2]; float qz = _q[3];
 
 
@@ -241,7 +219,7 @@ float AttitudeEstimator::getNetVerticalAcceleration(bool isZDown) const {
     
     // Apply noise floor (threshold) to keep pad telemetry clean
     if (abs(netAcc) < NET_ACC_THRESHOLD) return 0.0f;
-    
+
     return netAcc;
 }
 

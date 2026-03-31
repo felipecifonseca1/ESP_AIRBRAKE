@@ -73,8 +73,8 @@ constexpr bool useRecovery                = false;     // Enable recovery sequen
 constexpr bool runBusScan                 = false;     // Run I2C bus scan at startup
 
 // --- IMU & Orientation ---
-constexpr bool PHYSICAL_Z_AXIS_DOWN       = true;      // IMU Mounting   : true: Z-Down | false: Z-Up
-constexpr bool USE_MAGNETOMETER           = true;      // Filter: Enable Mag for drift correction
+constexpr bool PHYSICAL_Z_AXIS_DOWN       = true;     // IMU Mounting   : true: Z-Down | false: Z-Up
+constexpr bool USE_MAGNETOMETER           = false;      // Filter: Enable Mag for drift correction
 constexpr float MAGNETOMETER_FUSION_WEIGHT = 0.01f;    // Mag Authority
 constexpr float ATTITUDE_GYRO_CUTOFF_DPS  = 0.00f;     // Gyro Deadband: Ignore rotations < this value [dps]
 
@@ -82,7 +82,7 @@ constexpr bool CALIBRATE_IMU_ON_STARTUP   = true;      // Run library calib ONLY
 constexpr bool PRINT_IMU_PARAMS           = false;     // Print biases to Serial at boot
 constexpr bool PERFORM_FINE_TUNING        = false;     // Run iterative bias tweak on every boot
 constexpr bool FORCED_MAG_CALIBRATION     = false;     // Trigger the 30s visual spin routine
-constexpr bool ERASE_CALIB_ON_STARTUP     = false;     // Force delete all saved IMU data
+constexpr bool ERASE_CALIB_ON_STARTUP     = false;      // Force delete all saved IMU data
 constexpr float CALIBRATION_ACCEL_TOL_G   = 0.0025f;   // Iterative target for Accel [g]
 constexpr float CALIBRATION_GYRO_TOL_DPS  = 0.025f;    // Iterative target for Gyro [dps]
 constexpr int   CALIBRATION_MAX_ITERATIONS  = 30;      // Safety limit for iterative calibration
@@ -110,9 +110,9 @@ namespace MagLocation {
 constexpr uint8_t DEFAULT_MAG_LOCATION = MagLocation::SAO_PAULO;
 
 // --- SD Card & Logging ---
-constexpr bool ENABLE_DATA_LOGGING        = false;      // Master switch for all logging
+constexpr bool ENABLE_DATA_LOGGING        = true;      // Master switch for all logging
 constexpr bool ENABLE_SD_LOGGING          = true;      // Toggle SD (CSV)
-constexpr bool ENABLE_INTERNAL_LOGGING    = true;      // Toggle Internal Flash (Binary)
+constexpr bool ENABLE_INTERNAL_LOGGING    = false;      // Toggle Internal Flash (Binary)
 constexpr bool ENABLE_EXTERNAL_LOGGING    = false;     // Toggle External Flash (Reserved)
 constexpr bool ENABLE_TELEMETRY           = true;      // Enable real-time monitor prints
 constexpr uint8_t TELEMETRY_LOGGING_DECIMATION = 5;    // Cycles between telemetry prints (10Hz) to save APB bandwidth
@@ -129,13 +129,9 @@ constexpr uint16_t LOG_SYNC_INTERVAL_SD   = 10;         // Sync every buffer flu
 constexpr uint16_t LOG_SYNC_INTERVAL_INT  = 15000;      // Sync Internal Flash 
 
 // --- HIL (Hardware-In-the-Loop) ---
-constexpr bool HIL_MODE_ACTIVE            = false;       // Enable  sensor simulation
+constexpr bool HIL_MODE_ACTIVE            = true;       // Enable  sensor simulation
 constexpr char HIL_FILENAME[]             = "/Teste_HIL_Sensors_ZDown.csv";
-constexpr uint32_t HIL_STABILIZATION_MS   = 15000;       // Time to wait for estimator to settle [ms]
-// HIL CSV axis convention: 
-// true  = Apply Z-Down compensation (Use this for Z-Up files like RocketPy native -1G)
-// false = Pass data raw (Use this for Z-Down files where accel_z is already +1G)
-constexpr bool HIL_Z_AXIS_DOWN            = true;        // Convention of the HIL CSV file
+constexpr uint32_t HIL_STABILIZATION_MS   = 20000;       // Time to wait for estimator to settle [ms]
 
 // --- Servo Specs ---
 constexpr bool TESTE_SERVO                = false;      // Enable servo test
