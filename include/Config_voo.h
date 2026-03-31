@@ -74,7 +74,7 @@ constexpr bool runBusScan                 = false;     // Run I2C bus scan at st
 
 // --- IMU & Orientation ---
 constexpr bool PHYSICAL_Z_AXIS_DOWN       = true;     // IMU Mounting   : true: Z-Down | false: Z-Up
-constexpr bool USE_MAGNETOMETER           = false;      // Filter: Enable Mag for drift correction
+constexpr bool USE_MAGNETOMETER           = true;      // Filter: Enable Mag for drift correction
 constexpr float MAGNETOMETER_FUSION_WEIGHT = 0.01f;    // Mag Authority
 constexpr float ATTITUDE_GYRO_CUTOFF_DPS  = 0.00f;     // Gyro Deadband: Ignore rotations < this value [dps]
 
@@ -111,7 +111,7 @@ constexpr uint8_t DEFAULT_MAG_LOCATION = MagLocation::SAO_PAULO;
 
 // --- SD Card & Logging ---
 constexpr bool ENABLE_DATA_LOGGING        = true;      // Master switch for all logging
-constexpr bool ENABLE_SD_LOGGING          = true;      // Toggle SD (CSV)
+constexpr bool ENABLE_SD_LOGGING          = false;      // Toggle SD (CSV)
 constexpr bool ENABLE_INTERNAL_LOGGING    = false;      // Toggle Internal Flash (Binary)
 constexpr bool ENABLE_EXTERNAL_LOGGING    = false;     // Toggle External Flash (Reserved)
 constexpr bool ENABLE_TELEMETRY           = true;      // Enable real-time monitor prints
@@ -129,8 +129,8 @@ constexpr uint16_t LOG_SYNC_INTERVAL_SD   = 10;         // Sync every buffer flu
 constexpr uint16_t LOG_SYNC_INTERVAL_INT  = 15000;      // Sync Internal Flash 
 
 // --- HIL (Hardware-In-the-Loop) ---
-constexpr bool HIL_MODE_ACTIVE            = true;       // Enable  sensor simulation
-constexpr char HIL_FILENAME[]             = "/Teste_HIL_Sensors_ZDown.csv";
+constexpr bool HIL_MODE_ACTIVE            = false;       // Enable  sensor simulation
+constexpr char HIL_FILENAME[]             = "/Teste_HIL_Sensors_ZUp.csv";
 constexpr uint32_t HIL_STABILIZATION_MS   = 20000;       // Time to wait for estimator to settle [ms]
 
 // --- Servo Specs ---
@@ -160,6 +160,7 @@ constexpr float KALMAN_VAR_ZUPT_VEL       = 0.000001f;  // Zero-velocity update 
 // --- Launch Detection ---
 constexpr float LAUNCH_ACCEL_THRESHOLD_G   = 1.5f;     // Acceleration threshold for lift-off [g]
 constexpr float LAUNCH_HEIGHT_THRESHOLD_M  = 4.0f;     // Minimum AGL altitude to confirm launch [m]
+constexpr uint8_t LAUNCH_CONFIRMATION_COUNT = 10;      // Consecutive cycles to confirm launch (~200ms)
 
 // --- Burnout Detection ---
 constexpr uint16_t BURNOUT_MIN_MOTOR_TIME_MS = 5000;   // Wait time before allowing burnout check [ms]

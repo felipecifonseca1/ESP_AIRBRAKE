@@ -227,7 +227,7 @@ public:
         if (autoUpdate) {
             if (!available()) return false;
             update_accel_gyro();
-            update_mag();
+            return update_mag();
         } else {
             a[0] = ax; a[1] = ay; a[2] = az;
             g[0] = gx; g[1] = gy; g[2] = gz;
@@ -536,7 +536,7 @@ public:
         a[1] = (float)raw_acc_gyro_data[1] * acc_resolution;
         a[2] = (float)raw_acc_gyro_data[2] * acc_resolution;
         
-        a[2]-= error_in_g; // ! Fix to acceleration range Up Down (-1 ; 1) -->  (1  ; -1) 
+        a[2]-= error_in_g; // ! Fix to acceleration range Up Down (-3 ; -1) -->  (-1  ; 1) 
         
         // Serial.print("Raw X: ");
         // Serial.print((float)raw_acc_gyro_data[0]);
@@ -568,7 +568,7 @@ private:
     }
 
 public:
-    void update_mag() {
+    bool update_mag() {
         int16_t mag_count[3] = {0, 0, 0};  // Stores the 16-bit signed magnetometer sensor output
 
         // Read the x/y/z adc values
@@ -580,7 +580,9 @@ public:
             m[0] = (float)(mag_count[0] * mag_resolution * mag_bias_factory[0] - mag_bias[0] * bias_to_current_bits) * mag_scale[0];  // get actual magnetometer value, this depends on scale being set
             m[1] = (float)(mag_count[1] * mag_resolution * mag_bias_factory[1] - mag_bias[1] * bias_to_current_bits) * mag_scale[1];
             m[2] = (float)(mag_count[2] * mag_resolution * mag_bias_factory[2] - mag_bias[2] * bias_to_current_bits) * mag_scale[2];
+            return true;
         }
+        return false;
     }
 
 private:
@@ -590,8 +592,8 @@ private:
             uint8_t raw_data[7];                                             // x/y/z gyro register data, ST2 register stored here, must read ST2 at end of data acquisition
             read_bytes(AK8963_ADDRESS, AK8963_XOUT_L, 7, &raw_data[0]);      // Read the six raw data and ST2 registers sequentially into data array
             if (MAG_MODE == 0x02 || MAG_MODE == 0x04 || MAG_MODE == 0x06) {  // continuous or external trigger read mode
-                if ((st1 & 0x02) != 0)                                       // check if data is not skipped
-                    return false;                                            // this should be after data reading to clear DRDY register
+                // if ((st1 & 0x02) != 0)                                       // check if data is not skipped
+                //     return false;                                            // this should be after data reading to clear DRDY register
             }
 
             uint8_t c = raw_data[6];                                         // End data read by reading ST2 register
