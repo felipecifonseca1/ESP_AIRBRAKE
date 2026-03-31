@@ -67,6 +67,14 @@ public:
                    const Matrix<float, 3, 3>& R_mag);
 
     /**
+     * @brief Velocity Update
+     * @param vel_meas Velocity vector [vx, vy, vz] (m/s)
+     * @param R_vel Measurement noise covariance (3x3)
+     */
+    void updateVelocity(const Matrix<float, 3, 1>& vel_meas, 
+                        const Matrix<float, 3, 3>& R_vel);
+
+    /**
      * @brief GPS Update (6D Position & Velocity)
      * @param pos_meas GPS Position [x, y, z] in meters
      * @param vel_meas GPS Velocity [x, y, z] in m/s

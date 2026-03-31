@@ -270,16 +270,25 @@ bool FlightController::runStateEstimator() {
           _navMekf.updateMag(mag_meas, mag_ref, R_mag);
       }
 
-      /* 
-      --- GPS Update Placeholder ---
-      If you have a GPS object:
-      if (gps->newPositionAvailable()) {
-          Matrix<float, 3, 1> gpsPos(gps->getPosX(), gps->getPosY(), gps->getPosZ());
-          Matrix<float, 3, 1> gpsVel(gps->getVelX(), gps->getVelY(), gps->getVelZ());
-          Matrix<float, 6, 6> R_gps = Matrix<float, 6, 6>::Identity() * 0.5f; // Adjust noise
-          _navMekf.updateGPS(gpsPos, gpsVel, R_gps);
+      // 5. Zero-Velocity Update (ZUPT) - The new ZUKF
+      // Only runs when the rocket is known to be stationary (on the pad)
+      if (_flightState == FlightState::HEALTH_CHECK || _flightState == FlightState::WAIT_LAUNCH) {
+          Matrix<float, 3, 1> zero_vel(0.0f, 0.0f, 0.0f);
+          Matrix<float, 3, 3> R_zupt = Matrix<float, 3, 3>::Identity() * 0.01f; // High confidence in zero velocity
+          _navMekf.updateVelocity(zero_vel, R_zupt);
       }
-      */
+
+      // 6. GPS Timing Simulation
+      if (SIMULATE_GPS_TIMING) {
+          static uint8_t gpsSimCounter = 0;
+          if (++gpsSimCounter >= 10) { // 10Hz simulation (100Hz / 10)
+              gpsSimCounter = 0;
+              Matrix<float, 3, 1> mock_pos(0.0f, 0.0f, 0.0f);
+              Matrix<float, 3, 1> mock_vel(0.0f, 0.0f, 0.0f);
+              Matrix<float, 6, 6> R_gps = Matrix<float, 6, 6>::Identity() * 0.1f; 
+              _navMekf.updateGPS(mock_pos, mock_vel, R_gps);
+          }
+      }
 
       // Sync state back to AttitudeEstimator for common math getters to work (tilt, netAccel)
       Matrix<float, 4, 1> q = _navMekf.getQuaternion();

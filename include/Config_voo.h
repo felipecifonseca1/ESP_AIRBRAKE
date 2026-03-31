@@ -65,6 +65,7 @@ constexpr float AIRBRAKE_REF_AREA_M2     = 0.02097f;   // Total cross-sectional 
 
 constexpr float Ts_ms                     = 10.0f;     // Control loop period [ms] 
 constexpr float Ts                        = 0.010f;    // Control loop period [s]
+constexpr bool SIMULATE_GPS_TIMING        = true;      // GPS: Simulation timing once every 10 cycles
 constexpr float apoggeTargetAltitude_m    = 3254.0f;   // Target mission apogee [m]
 constexpr float maxTiltAngle              = 60.0f;     // Max safety tilt for actuation [deg]
 constexpr float NET_ACC_THRESHOLD         = 0.2f;      // Vertical noise floor [m/s^2]

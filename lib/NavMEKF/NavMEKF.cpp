@@ -144,6 +144,21 @@ void NavMEKF::updateAccel(const Matrix<float, 3, 1>& acc_meas, const Matrix<floa
     _cov = _temp15x15 * _cov * _temp15x15.transpose() + _K15x3 * R_acc * _K15x3.transpose();
 }
 
+void NavMEKF::updateVelocity(const Matrix<float, 3, 1>& vel_meas, const Matrix<float, 3, 3>& R_vel) {
+    // Velocity maps to Velocity Error [3:6]
+    Matrix<float, 3, 15> H = Matrix<float, 3, 15>::Zero();
+    H.block<3, 3>(0, 3) = Matrix<float, 3, 3>::Identity();
+
+    Matrix<float, 3, 3> S = H * _cov * H.transpose() + R_vel;
+    _K15x3 = _cov * H.transpose() * S.inverse();
+
+    Matrix<float, 3, 1> innovation = vel_meas - _vel;
+    injectErrorState(_K15x3 * innovation);
+
+    _temp15x15 = _I15 - _K15x3 * H;
+    _cov = _temp15x15 * _cov * _temp15x15.transpose() + _K15x3 * R_vel * _K15x3.transpose();
+}
+
 void NavMEKF::updateGPS(const Matrix<float, 3, 1>& pos_meas, const Matrix<float, 3, 1>& vel_meas, const Matrix<float, 6, 6>& R_gps) {
     // GPS maps to Position [0:3] and Velocity [3:6]
     Matrix<float, 6, 15> H = Matrix<float, 6, 15>::Zero();
