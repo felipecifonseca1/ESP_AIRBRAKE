@@ -22,7 +22,7 @@
 #include "AttitudeEstimator.h"
 #include "DataManager.h"
 #include "Sinalizacao.h"
-#include <ArduinoEigenDense.h>
+#include <ArduinoEigen.h>
 #include "Config_voo.h" 
 #include "SystemUtils.h"
 
@@ -213,10 +213,10 @@ void TaskSerialComm(void *pvParameters) {
                 (1.0f - (float)diag.cyclesExceeded / diag.totalCycles) * 100.0f : 100.0f;
 
             DEBUG_PRINTLN_F("\n--- CORE 1: FLIGHT CONTROL ---");
-            DEBUG_PRINTF("Sensors Read:     %u us\n", diag.sensorRead_us);
-            DEBUG_PRINTF("IMU Filter:       %u us\n", diag.imuFilter_us);
-            DEBUG_PRINTF("Nav/Calculation:  %u us\n", diag.navCalc_us);
-            DEBUG_PRINTF("Kalman Update:    %u us\n", diag.kalmanUpdate_us);
+            DEBUG_PRINTF("Sensor Read:      %u us\n", diag.sensorRead_us);
+            DEBUG_PRINTF("Inertial (Predict):%u us\n", diag.imuFilter_us);
+            DEBUG_PRINTF("Fusion (Update):   %u us\n", diag.kalmanUpdate_us);
+            DEBUG_PRINTF("State Sync:        %u us\n", diag.navCalc_us);
             DEBUG_PRINTF("Queue Send:       %u us\n", diag.queueSend_us);
             DEBUG_PRINTF("Total Execution:  %u us\n", diag.totalExecute_us);
             DEBUG_PRINTF("Peak Execution:   %u us\n", diag.peakExecution_us);

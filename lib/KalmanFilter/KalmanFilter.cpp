@@ -1,6 +1,5 @@
-#include "KalmanFilter.hh" // Ajuste o caminho se necessário
-#include "Config_voo.h" 
-#include <ArduinoEigenDense.h>
+#include "KalmanFilter.hh"
+#include <ArduinoEigen.h>
 
 using namespace Eigen;
 
@@ -13,7 +12,7 @@ KalmanFilter::~KalmanFilter() {}
  * @param G_in Control Matrix.
  * @param H_in Measurement Matrix.
  * @param Q_in Process Noise Covariance.
- * @param R_in Measurement Noise Covariance (Initial).
+ * @param R_in Measurement Noise Covariance.
  * @param P0_in Initial Error Covariance.
  * @param X0_in Initial State Estimate.
  */
@@ -34,7 +33,7 @@ void KalmanFilter::init(const Matrix<float, KF_STATES, KF_STATES>& F_in,
 /**
  * @brief Performs the Prediction (Time Update) step of the Kalman Filter.
  * @details This step projects the current state estimate and error covariance forward in time
- * using the system's dynamic model (Newton's laws).
+ * using the system's dynamic model.
  * * Equations:
  * 1. State Extrapolation:  x(k|k-1) = F * x(k-1|k-1) + G * u(k)
  * (New Position = Old Position + Velocity*dt + 0.5*acc*dt^2)

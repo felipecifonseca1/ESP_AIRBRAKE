@@ -1,22 +1,28 @@
 CompileFlags:
   Add: 
     - --target=xtensa-esp32-elf
-    - -isystem
-    - C:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0
-    - -isystem
-    - C:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/xtensa-esp-elf
-    - -isystem
-    - C:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/xtensa-esp-elf/include
-    - -isystem
-    - C:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include
-    - -DARDUINO=10812
-    - -DESP32
-    - -DESP32S3
-    - -DARDUINO_ARCH_ESP32
-    - -D__XTENSA__
-    - -DCONFIG_IDF_TARGET_ESP32S3
-    - -D__LITTLE_ENDIAN__=1
-    - --include=Arduino.h
+    - -DARDUINO_EIGEN_USE_STL
+    - -D__GNUC__=14
+    - -D__cplusplus=202101L
+    - -DXCHAL_HAVE_LOOPS=1
+    - -DXCHAL_HAVE_MAC16=0
+    - -DXCHAL_HAVE_WINDOWED=1
+    - -DXCHAL_NUM_AREGS=64
+    - -DXCHAL_HAVE_FP=1
+    - -D__xtensa__
+    # System Includes
+    - -isystemC:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/xtensa-esp-elf/include
+    - -isystemC:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0
+    - -isystemC:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/xtensa-esp-elf
+    - -isystemC:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include
+    - -isystemC:/Users/Fefon/.platformio/packages/framework-arduinoespressif32/cores/esp32
+    # Project Library Includes
+    - -IC:/Users/Fefon/OneDrive/Documentos/PlatformIO/Projects/ESP_AIRBRAKE/.pio/libdeps/esp32-s3-devkitc1-n16r8/ArduinoEigen
+    - -IC:/Users/Fefon/OneDrive/Documentos/PlatformIO/Projects/ESP_AIRBRAKE/.pio/libdeps/esp32-s3-devkitc1-n16r8/ArxTypeTraits
+    - -Ilib/NavMEKF
+    - -Ilib/KalmanFilter
+    - -Ilib/AttitudeEstimator
+    - -Ilib/DataManager
   Remove: 
     - -mlongcalls
     - -mlong-calls
@@ -26,13 +32,6 @@ CompileFlags:
     - -fno-jump-tables
     - -fstack-protector
   Compiler: C:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/bin/xtensa-esp32s3-elf-g++.exe
-
-QueryDriver:
-  - C:/Users/Fefon/.platformio/packages/toolchain-xtensa-esp-elf/bin/xtensa-esp32*-elf-*
-  - C:/Users/Fefon/.platformio/packages/framework-arduinoespressif32/**
-
-Diagnostics:
-  Suppress: [drv_unknown_argument, drv_unknown_argument_with_suggestion, drv_unsupported_opt_for_target, ovl_no_viable_member_function_in_call]
 
 Index:
   Background: Build

@@ -2,7 +2,7 @@
 #define MEKF_H
 
 #include <Arduino.h>
-#include <ArduinoEigenDense.h>
+#include <ArduinoEigen.h>
 
 using namespace Eigen;
 
@@ -16,8 +16,6 @@ using namespace Eigen;
  *
  *          Measurement updates use a sequential (one sensor at a time) strategy,
  *          which limits matrix inversion to 3x3, making this highly efficient on the ESP32.
- *
- * @ref https://matthewhampsey.github.io/blog/2020/07/18/mekf
  */
 class MEKF {
 public:
@@ -58,7 +56,7 @@ public:
      *          Each call inverts only a 3x3 matrix (S), keeping compute cost low.
      *
      * @param measurement The raw (unnormalized) sensor vector in the body frame (e.g., [ax, ay, az]).
-     * @param reference   The reference vector in the Earth (world) frame (normalized internally).
+     * @param reference   The reference vector in the Earth (world) frame.
      *                    E.g., [0, 0, 1] for gravity (Z-Up), [1, 0, 0] for magnetic North.
      * @param R_meas      Measurement noise covariance matrix for this sensor (3x3).
      */

@@ -5,7 +5,7 @@
 #include "Controller.hh" // Include PID Controller
 #include "KalmanFilter.hh" // Include Kalman Filter
 #include <Arduino.h>
-#include <ArduinoEigenDense.h>
+#include <ArduinoEigen.h>
 #include <ESP32Servo.h>
 #include "BarometricSensor.h"
 #include "AttitudeEstimator.h"
