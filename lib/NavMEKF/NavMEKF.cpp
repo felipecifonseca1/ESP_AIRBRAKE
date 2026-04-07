@@ -62,14 +62,29 @@ void NavMEKF::predict(const Matrix<float, 3, 1>& gyro_meas, const Matrix<float, 
     Matrix<float, 3, 1> gyro_clean = gyro_meas - _gyro_bias;
     Matrix<float, 3, 1> acc_clean = acc_meas - _accel_bias;
 
-    // 1. Integrate Quaternion
-    Matrix<float, 4, 1> gyro_quat;
-    gyro_quat << 0.0f, gyro_clean(0), gyro_clean(1), gyro_clean(2);
-    Matrix<float, 4, 1> q_dot = 0.5f * quatMultiply(_quat, gyro_quat);
-    _quat += q_dot * dt;
+    // 1. Integrate Quaternion (Using Exponential Map for stability at high spin)
+    Matrix<float, 3, 1> delta_theta = gyro_clean * dt;
+    float angle = delta_theta.norm();
+    Matrix<float, 4, 1> dq;
+    
+    if (angle > 1e-5f) {
+        float half_angle = angle * 0.5f;
+        float s = sinf(half_angle) / angle;
+        dq(0) = cosf(half_angle);
+        dq(1) = delta_theta(0) * s;
+        dq(2) = delta_theta(1) * s;
+        dq(3) = delta_theta(2) * s;
+    } else {
+        dq(0) = 1.0f;
+        dq(1) = delta_theta(0) * 0.5f;
+        dq(2) = delta_theta(1) * 0.5f;
+        dq(3) = delta_theta(2) * 0.5f;
+    }
+    
+    _quat = quatMultiply(_quat, dq);
     _quat.normalize();
 
-    // 2. Integrate Position and Velocity
+    // 2. Integrate Position and Velocity (State Propagation)
     Matrix<float, 3, 3> R = quatToMatrix(_quat);
     Matrix<float, 3, 1> gravity(0.0f, 0.0f, -_G_GRAVITY); // Z-Up Earth Frame
     Matrix<float, 3, 1> acc_world = R * acc_clean + gravity;
@@ -80,7 +95,7 @@ void NavMEKF::predict(const Matrix<float, 3, 1>& gyro_meas, const Matrix<float, 
     // 3. Form Process Jacobian (_F)
     _G.block<3, 3>(6, 6) = -skewSymmetric(gyro_clean);      // dtheta_dot / dtheta
     _G.block<3, 3>(3, 6) = -R * skewSymmetric(acc_clean);   // dv_dot / dtheta
-    _G.block<3, 3>(3, 9) = -R;                              // dv_dot / dab
+    _G.block<3, 3>(3, 9) = -R;                              // dv_dot / dab (Both in physical units)
 
     _F = _I15 + _G * dt;
 
@@ -104,40 +119,56 @@ void NavMEKF::updateBaro(float measuredAltitude, float R_baro) {
     _cov = _temp15x15 * _cov * _temp15x15.transpose() + _K15x1 * R_baro * _K15x1.transpose(); // Joseph Form
 }
 
-void NavMEKF::updateMag(const Matrix<float, 3, 1>& mag_meas, const Matrix<float, 3, 1>& mag_ref, const Matrix<float, 3, 3>& R_mag) {
+void NavMEKF::updateMag(const Matrix<float, 3, 1>& mag_meas, const Matrix<float, 3, 1>& mag_ref, float R_mag) {
     if (mag_meas.squaredNorm() < 1e-6f) return;
 
-    // Expected magnetometer reading in the body frame
-    Matrix<float, 3, 1> expected_mag = rotateInverse(_quat, mag_ref.normalized());
+    Matrix<float, 3, 3> R = quatToMatrix(_quat);
+    
+    // 1. Project Body-Mag into World Frame to find Measured Heading
+    Matrix<float, 3, 1> m_world = R * mag_meas.normalized();
+    float psi_meas = atan2f(m_world(1), m_world(0));
+    float psi_ref  = atan2f(mag_ref(1), mag_ref(0));
 
-    // H maps to Attitude Error [Indices 6:8]
-    Matrix<float, 3, 15> H = Matrix<float, 3, 15>::Zero();
-    H.block<3, 3>(0, 6) = skewSymmetric(expected_mag);
+    // 2. Innovation (Yaw Error)
+    float innovation = psi_meas - psi_ref;
+    while (innovation >  3.14159265f) innovation -= 6.28318531f; 
+    while (innovation < -3.14159265f) innovation += 6.28318531f; 
 
-    Matrix<float, 3, 3> S = H * _cov * H.transpose() + R_mag;
-    _K15x3 = _cov * H.transpose() * S.inverse();
+    // 3. Construct Jacobian (H)
+    // We observe the rotation error around the World-Z axis.
+    // Mapping world-Z error into body error coordinates: h_body = R.row(2).
+    Matrix<float, 1, 15> H = Matrix<float, 1, 15>::Zero();
+    H(0, 6) = R(2, 0); 
+    H(0, 7) = R(2, 1);
+    H(0, 8) = R(2, 2);
 
-    Matrix<float, 3, 1> innovation = mag_meas.normalized() - expected_mag;
-    injectErrorState(_K15x3 * innovation);
+    // 4. Kalman Gain Calculation (1D Update)
+    float S = (H * _cov * H.transpose())(0, 0) + R_mag;
+    _K15x1 = _cov * H.transpose() / S;
 
-    _temp15x15 = _I15 - _K15x3 * H;
-    _cov = _temp15x15 * _cov * _temp15x15.transpose() + _K15x3 * R_mag * _K15x3.transpose();
+    // 5. Update State
+    injectErrorState(_K15x1 * innovation);
+
+    // 6. Update Covariance
+    _temp15x15 = _I15 - _K15x1 * H;
+    _cov = _temp15x15 * _cov * _temp15x15.transpose() + _K15x1 * R_mag * _K15x1.transpose();
 }
 void NavMEKF::updateAccel(const Matrix<float, 3, 1>& acc_meas, const Matrix<float, 3, 3>& R_acc) {
-    // Expected gravity in body frame: R^T * [0, 0, 1] (Z-Up World assuming Stationary)
-    Matrix<float, 3, 1> world_gravity_dir(0.0f, 0.0f, 1.0f);
-    Matrix<float, 3, 1> expected_acc = rotateInverse(_quat, world_gravity_dir);
+    // Expected gravity in body frame: R^T * [0, 0, g]
+    Matrix<float, 3, 1> world_gravity(0.0f, 0.0f, _G_GRAVITY);
+    Matrix<float, 3, 1> g_body = rotateInverse(_quat, world_gravity);
+    Matrix<float, 3, 1> expected_acc = g_body + _accel_bias;
 
     // H maps to Attitude Error [6:8] and Accel Bias [9:11]
     Matrix<float, 3, 15> H = Matrix<float, 3, 15>::Zero();
-    H.block<3, 3>(0, 6) = skewSymmetric(expected_acc);
+    H.block<3, 3>(0, 6) = skewSymmetric(g_body); 
     H.block<3, 3>(0, 9) = Matrix<float, 3, 3>::Identity();
 
     Matrix<float, 3, 3> S = H * _cov * H.transpose() + R_acc;
     _K15x3 = _cov * H.transpose() * S.inverse();
 
-    // Measurement is normalized to capture direction only
-    Matrix<float, 3, 1> innovation = acc_meas.normalized() - expected_acc;
+    // Measurement is in m/s^2 for physical bias tracking
+    Matrix<float, 3, 1> innovation = acc_meas - expected_acc;
     injectErrorState(_K15x3 * innovation);
 
     _temp15x15 = _I15 - _K15x3 * H;

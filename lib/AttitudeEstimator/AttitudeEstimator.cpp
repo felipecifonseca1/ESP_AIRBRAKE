@@ -46,13 +46,13 @@ void AttitudeEstimator::update(float dt, bool ignoreAccel) {
     float gy = _imu->getGyroY_rads();
     float gz = _imu->getGyroZ_rads();
 
-    // Apply Gyro Cutoff (convert threshold to rad/s for comparison)
+    // Apply Gyro Cutoff 
     float cutoff_rads = ATTITUDE_GYRO_CUTOFF_DPS * DEG_TO_RAD;
     if (abs(gx) < cutoff_rads) gx = 0.0f;
     if (abs(gy) < cutoff_rads) gy = 0.0f;
     if (abs(gz) < cutoff_rads) gz = 0.0f;
 
-    // Store transformed gyro values for telemetry (in DPS for easier plotting)
+    // Store transformed gyro values for telemetry
     _transformedGyroX = gx * RAD_TO_DEG;
     _transformedGyroY = gy * RAD_TO_DEG;
     _transformedGyroZ = gz * RAD_TO_DEG;
@@ -120,7 +120,7 @@ void AttitudeEstimator::setDriftLearning(bool enabled) {
 void AttitudeEstimator::setFilterBeta(float errorDegPerSec) {
     float gyroErr = PI * (errorDegPerSec / 180.0f);
     _beta = sqrt(3.0f / 4.0f) * gyroErr;
-    _zeta = _beta; // [FIX] Synchronize Integral Gain to proportional bounds to prevent Windup
+    _zeta = _beta; // Synchronize Integral Gain to proportional bounds to prevent Windup
 }
 
 /**
@@ -128,8 +128,6 @@ void AttitudeEstimator::setFilterBeta(float errorDegPerSec) {
  */
 void AttitudeEstimator::resetOrientation() {
     // Standard Z-Up (Default): q = [1, 0, 0, 0]
-    // Even if physicalZAxisDown is true, we reset to Upright because the HAL
-    // standardizes the data to Z-Up before it reaches the filter.
     _q[0] = 1.0f; _q[1] = 0.0f; _q[2] = 0.0f; _q[3] = 0.0f;
     _mekf.resetState();
 }
@@ -234,7 +232,7 @@ float AttitudeEstimator::getNetVerticalAcceleration() const {
 }
 
 /**
- * @brief Pure angular rate integration (no correction).
+ * @brief Pure angular rate integration.
  */
 void AttitudeEstimator::updateNone(float ax, float ay, float az, float gx, float gy, float gz) {
     float q0 = _q[0], q1 = _q[1], q2 = _q[2], q3 = _q[3];
@@ -249,7 +247,7 @@ void AttitudeEstimator::updateNone(float ax, float ay, float az, float gx, float
 
 /**
  * @brief Madgwick orientation filter implementation.
- * @details Ported from the original MPU9250 package. Supports magnetometer if valid.
+ * @details Supports magnetometer if valid.
  */
 void AttitudeEstimator::updateMadgwick(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz, bool ignoreAccel) {
     double q0 = _q[0], q1 = _q[1], q2 = _q[2], q3 = _q[3];
@@ -421,20 +419,20 @@ void AttitudeEstimator::updateMEKF(float ax, float ay, float az, float gx, float
     using Mat3 = Eigen::Matrix<float, 3, 3>;
     using Vec4 = Eigen::Matrix<float, 4, 1>;
 
-    // --- 1. Predict ---
+    // --- Predict ---
     Vec3 gyro(gx, gy, gz);
     _mekf.predict(gyro, _deltaT);
 
-    // --- 2. Accelerometer update ---
+    // --- Accelerometer update ---
     // Reference: gravity vector in Earth frame (Z-Up convention: +Z points skyward)
     if (!ignoreAccel) {
         Vec3 accel(ax, ay, az);
         Vec3 ref_gravity(0.0f, 0.0f, 1.0f);
-        Mat3 R_accel = Mat3::Identity() * _mekf_r_accel; // Use dynamic tuning
+        Mat3 R_accel = Mat3::Identity() * _mekf_r_accel; 
         _mekf.updateMeasurement(accel, ref_gravity, R_accel);
     }
 
-    // --- 3. Magnetometer update ---
+    // --- Magnetometer update ---
     if (_useMagnetometer) {
         Vec3 mag(mx, my, mz);
         // Reference: local magnetic field direction in Earth frame.
@@ -444,7 +442,7 @@ void AttitudeEstimator::updateMEKF(float ax, float ay, float az, float gx, float
         // We pass the scalar variance mekf_r_mag.
         _mekf.updateMagnetometerYaw(mag, ref_mag, _mekf_r_mag);
     }
-    // --- 4. Write quaternion back to shared _q array ---
+    // --- Write quaternion back to shared _q array ---
     Vec4 result_q = _mekf.getQuaternion();
     _q[0] = result_q(0); // w
     _q[1] = result_q(1); // x

@@ -2,7 +2,8 @@
 #define NAV_MEKF_H
 
 #include <Arduino.h>
-#include <ArduinoEigenDense.h>
+#include <ArduinoEigen.h>
+#include "Config_voo.h"
 
 using namespace Eigen;
 
@@ -42,7 +43,7 @@ public:
                  float dt);
 
     /**
-     * @brief Accelerometer Update (3D Gravity Fusion)
+     * @brief Accelerometer Update
      * @param acc_meas Raw or aligned accelerometer reading [x, y, z] (G's)
      * @param R_acc Measurement noise covariance (3x3)
      */
@@ -50,21 +51,21 @@ public:
                      const Matrix<float, 3, 3>& R_acc);
 
     /**
-     * @brief Barometer Update (1D Z-Position)
+     * @brief Barometer Update 
      * @param measuredAltitude Altitude in meters
      * @param R_baro Measurement noise variance for barometer
      */
     void updateBaro(float measuredAltitude, float R_baro);
 
     /**
-     * @brief Magnetometer Update (3D Attitude Correction)
+     * @brief Magnetometer Update
      * @param mag_meas Raw magnetometer reading [x, y, z]
      * @param mag_ref Earth's magnetic field reference vector (normalized)
      * @param R_mag Measurement noise covariance (3x3)
      */
     void updateMag(const Matrix<float, 3, 1>& mag_meas, 
                    const Matrix<float, 3, 1>& mag_ref, 
-                   const Matrix<float, 3, 3>& R_mag);
+                   float R_mag);
 
     /**
      * @brief Velocity Update
@@ -109,7 +110,7 @@ private:
     Matrix<float, 3, 3> _accel_cov_mat;
     Matrix<float, 3, 3> _accel_bias_cov_mat;
 
-    static constexpr float _G_GRAVITY = 9.80665f;
+    static constexpr float _G_GRAVITY = G_GRAVITATIONAL_CONSTANT;
 
     // Mathematical Helpers
     void compute_process_covariance(float dt);
@@ -120,7 +121,7 @@ private:
     Matrix<float, 3, 3> quatToMatrix(const Matrix<float, 4, 1>& q) const;
     Matrix<float, 3, 1> rotateInverse(const Matrix<float, 4, 1>& q, const Matrix<float, 3, 1>& v) const;
 
-    // --- Scratch Matrices (Pre-allocated to prevent Stack Overflow) ---
+    // --- Scratch Matrices ---
     Matrix<float, 15, 15> _I15;
     Matrix<float, 15, 15> _F;
     Matrix<float, 15, 15> _Q;

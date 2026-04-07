@@ -65,12 +65,13 @@ constexpr float AIRBRAKE_REF_AREA_M2     = 0.02097f;   // Total cross-sectional 
 
 constexpr float Ts_ms                     = 10.0f;     // Control loop period [ms] 
 constexpr float Ts                        = 0.010f;    // Control loop period [s]
-constexpr bool SIMULATE_GPS_TIMING        = true;      // GPS: Simulation timing once every 10 cycles
+constexpr bool SIMULATE_GPS_TIMING        = false;      // GPS: Simulation timing once every 10 cycles
 constexpr float apoggeTargetAltitude_m    = 3254.0f;   // Target mission apogee [m]
 constexpr float maxTiltAngle              = 60.0f;     // Max safety tilt for actuation [deg]
 constexpr float NET_ACC_THRESHOLD         = 0.2f;      // Vertical noise floor [m/s^2]
 constexpr uint32_t WDT_TIMEOUT_MS         = 5000;      // Watchdog timeout in milliseconds
 constexpr bool useRecovery                = false;     // Enable recovery sequence logic
+constexpr uint32_t RTC_SAVE_INTERVAL_MS   = 100;       // Period for state backup
 constexpr bool runBusScan                 = false;     // Run I2C bus scan at startup
 
 // --- IMU & Orientation ---
@@ -89,8 +90,8 @@ constexpr float CALIBRATION_GYRO_TOL_DPS  = 0.025f;    // Iterative target for G
 constexpr int   CALIBRATION_MAX_ITERATIONS  = 30;      // Safety limit for iterative calibration
 
 // Acceleration magnitude window to trust gravity for orientation correction.
-constexpr float ORIENTATION_MASK_MIN_G     = 0.85f;     // TRUST accel only if > 0.85g
-constexpr float ORIENTATION_MASK_MAX_G     = 1.15f;     // TRUST accel only if < 1.15g
+constexpr float ORIENTATION_MASK_MIN_G     = 0.95f;     // TRUST accel only if > 0.95g
+constexpr float ORIENTATION_MASK_MAX_G     = 1.05f;     // TRUST accel only if < 1.05g
 
 namespace AttitudeFilter {
     constexpr uint8_t NONE     = 0;
@@ -113,7 +114,7 @@ constexpr uint8_t DEFAULT_MAG_LOCATION = MagLocation::SAO_PAULO;
 
 // --- SD Card & Logging ---
 constexpr bool ENABLE_DATA_LOGGING        = true;      // Master switch for all logging
-constexpr bool ENABLE_SD_LOGGING          = false;      // Toggle SD (CSV)
+constexpr bool ENABLE_SD_LOGGING          = true;      // Toggle SD (CSV)
 constexpr bool ENABLE_INTERNAL_LOGGING    = false;      // Toggle Internal Flash (Binary)
 constexpr bool ENABLE_EXTERNAL_LOGGING    = false;     // Toggle External Flash (Reserved)
 constexpr bool ENABLE_TELEMETRY           = true;      // Enable real-time monitor prints
@@ -131,8 +132,8 @@ constexpr uint16_t LOG_SYNC_INTERVAL_SD   = 10;         // Sync every buffer flu
 constexpr uint16_t LOG_SYNC_INTERVAL_INT  = 15000;      // Sync Internal Flash 
 
 // --- HIL (Hardware-In-the-Loop) ---
-constexpr bool HIL_MODE_ACTIVE            = false;       // Enable  sensor simulation
-constexpr char HIL_FILENAME[]             = "/Teste_HIL_Sensors_ZUp.csv";
+constexpr bool HIL_MODE_ACTIVE            = true;       // Enable  sensor simulation
+constexpr char HIL_FILENAME[]             = "/Teste_HIL_Sensors_ZDown.csv";
 constexpr uint32_t HIL_STABILIZATION_MS   = 20000;       // Time to wait for estimator to settle [ms]
 
 // --- Servo Specs ---
@@ -149,11 +150,24 @@ constexpr float PID_KP                    = 0.025f;     // Proportional gain
 constexpr float PID_KI                    = 0.075f;     // Integral gain
 constexpr float PID_KD                    = 0.02f;      // Derivative gain
 
-// --- Kalman Filter ---
+// --- Kalman Filter (1D) ---
 constexpr float KALMAN_VAR_PROC_POS       = 1.0f;       // Process variance: Position
 constexpr float KALMAN_VAR_PROC_VEL       = 3.0f;       // Process variance: Velocity
 constexpr float KALMAN_VAR_MEAS_ALT       = 1.0f;       // Measurement variance: Baro Altitude
 constexpr float KALMAN_VAR_ZUPT_VEL       = 0.000001f;  // Zero-velocity update variance
+
+// --- NavMEKF Tuning Parameters ---
+constexpr float NAV_MEKF_P0_SCALE          = 1.0f;       // Initial state uncertainty scalar
+constexpr float NAV_MEKF_GYRO_COV          = 1e-3f;      // Gyro noise [rad/s]^2
+constexpr float NAV_MEKF_GYRO_BIAS_COV     = 1e-5f;      // Gyro bias drift
+constexpr float NAV_MEKF_ACCEL_COV         = 0.5f;       // Accelerometer noise [m/s^2]^2
+constexpr float NAV_MEKF_ACCEL_BIAS_COV    = 0.001f;     // Accelerometer bias drift
+
+// --- NavMEKF Measurement Noise Scalars (R) ---
+constexpr float NAV_MEKF_ACCEL_R_SCALE     = 200.0f;     // [m/s^2]^2 Gravity fusion damping
+constexpr float NAV_MEKF_MAG_R_SCALE       = 1.0f;       // [rad]^2 Magnetometer heading damping
+constexpr float NAV_MEKF_ZUPT_R_SCALE      = 0.01f;      // Zero-Velocity update damping
+constexpr float NAV_MEKF_GPS_R_SCALE       = 0.1f;       // GPS fusion damping
 
 // =========================================================================
 // FLIGHT EVENTS DETECTION

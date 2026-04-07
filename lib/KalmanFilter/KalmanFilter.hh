@@ -1,13 +1,12 @@
 #ifndef KALMANFILTER_HH
 #define KALMANFILTER_HH
 
-#include <ArduinoEigenDense.h>
+#include <ArduinoEigen.h>
 
 
-// Definindo os tamanhos do filtro como constantes para clareza
-const int KF_STATES = 2;       // [altitude, velocidade]
-const int KF_INPUTS = 1;       // [aceleracao_liquida]
-const int KF_MEASUREMENTS = 2; // [altitude_medida, velocidade_medida]
+const int KF_STATES = 2;       // [altitude, velocity]
+const int KF_INPUTS = 1;       // [net acceleration]
+const int KF_MEASUREMENTS = 2; // [measured altitude, measured velocity]
 
 using namespace Eigen;
 
