@@ -13,6 +13,7 @@
 #include <esp_task_wdt.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#include <freertos/event_groups.h>
 
 // Modules
 #include "FlightController.h"
@@ -23,7 +24,6 @@
 #include "DataManager.h"
 #include "Sinalizacao.h"
 #include <ArduinoEigen.h>
-#include "Config_voo.h" 
 #include "SystemUtils.h"
 
 #define EEPROM_SIZE 256 // Define EEPROM size
@@ -43,6 +43,10 @@ FlightController &flightController = FlightController::getInstance(&flightBaro, 
 // --- FreeRTOS Handles ---
 QueueHandle_t flightDataQueue;
 SemaphoreHandle_t serialMutex;
+EventGroupHandle_t systemEventGroup;
+
+// Event bits
+#define EVT_FORCE_SYNC  (1 << 0)  // Signal Core 0 to flush SD/Flash buffers
 
 // --- Task Functions ---
 void TaskFlightControl(void *pvParameters);
@@ -98,6 +102,15 @@ void TaskLogging(void *pvParameters) {
       if (logger.isLoggingActive()) {
         logger.logFlightData(dataToLog);
       }
+
+      // Core 1 signals this bit on critical state transitions (e.g. DESCENT/LANDING).
+      EventBits_t evBits = xEventGroupGetBits(systemEventGroup);
+      if (evBits & EVT_FORCE_SYNC) {
+        xEventGroupClearBits(systemEventGroup, EVT_FORCE_SYNC);
+        logger.forceSync();
+        DEBUG_PRINTLN_F("LOG: forceSync executed on Core 0.");
+      }
+      // ---------------------------------
       
       // Offloaded Telemetry: Run at decimated rate to avoid saturating Serial
       if (++telemetryDecimation >= TELEMETRY_LOGGING_DECIMATION) {
@@ -268,8 +281,9 @@ void setup() {
   }
   bool recoverySuccess = false;
 
-  // Create Global Mutexes
+  // Create Global Synchronization Primitives
   serialMutex = xSemaphoreCreateMutex();
+  systemEventGroup = xEventGroupCreate();
 
   // Create the Data Queue
   flightDataQueue = xQueueCreate(20, sizeof(RawFlightData));
@@ -360,8 +374,6 @@ void setup() {
   flightController.setupKalman();
   flightController.getAttitudeEstimator()->setUseMagnetometer(USE_MAGNETOMETER);
   flightController.getAttitudeEstimator()->setMagnetometerWeight(MAGNETOMETER_FUSION_WEIGHT);
-
-  // Serial.flush() removed to prevent blocking on boot if monitor is closed
 
   if (HIL_MODE_ACTIVE) {
     DEBUG_PRINTLN("HIL Mode: Forcing state to WAIT_LAUNCH");

@@ -13,6 +13,7 @@ class Controller{
         void setLimits(float lowerLimit, float upperLimit);
         float clamp(float value);
         float antiWindUp(float integrative);
+        void resetIntegral();  // Clear integrator on state transitions to prevent windup bias
         float computeCd(float desiredApogee, float currentAltitude, float currentVelocity, float gravity, float rho);
 
     private:
@@ -20,7 +21,6 @@ class Controller{
         float _mass_kg;
         float _area_m2;
 
-        // Ganhos e estado do PID
         float _Kp, _Ki, _Kd;
         float _dt;
         float _min_output, _max_output;

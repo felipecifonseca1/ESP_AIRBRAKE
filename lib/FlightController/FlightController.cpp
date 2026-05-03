@@ -1,7 +1,12 @@
 #include "FlightController.h"
 #include "DataManager.h"
 #include <freertos/FreeRTOS.h>
+#include <freertos/event_groups.h>
 #include <freertos/queue.h>
+
+// System-wide EventGroup defined in main.cpp
+extern EventGroupHandle_t systemEventGroup;
+#define EVT_FORCE_SYNC  (1 << 0)  // Must match definition in main.cpp
 
 extern QueueHandle_t flightDataQueue;
 #include "AltitudeSpeedTable.hh"
@@ -25,8 +30,7 @@ static const uint32_t RTC_MAGIC = 0xABBA1234;
  * BarometricSensor pointer must be provided.
  * @return Reference to the FlightController instance.
  */
-FlightController &FlightController::getInstance(BarometricSensor *b,
-                                                AttitudeEstimator *estimator) {
+FlightController &FlightController::getInstance(BarometricSensor *b,AttitudeEstimator *estimator) {
   static FlightController instance(b, estimator);
   if (b != nullptr) {
     instance.baro = b;
@@ -444,10 +448,12 @@ void FlightController::update() {
   if (_flightState != lastState) {
     saveStateToRTC();
 
-    // Selective Force Sync for critical data persistence (Apogee/Landing)
+    // Signal Core 0 (TaskLogging) to perform the forceSync asynchronously.
     if (_flightState == FlightState::DESCENT ||
         _flightState == FlightState::LANDING) {
-      DataManager::getInstance().forceSync();
+      if (systemEventGroup) {
+        xEventGroupSetBits(systemEventGroup, EVT_FORCE_SYNC);
+      }
     }
 
     lastState = _flightState;
@@ -592,6 +598,8 @@ void FlightController::motorOnLoop() {
 void FlightController::burnoutLoop() {
   // Check for airbrakes actuation window
   if (detectAirbrakesActuation(_filteredAltitude, _filteredVerticalVelocity)) {
+    _controller.resetIntegral(); // Clear PID windup accumulated during coast phase
+    _tiltLockout = false;        // Reset tilt latch for fresh deployment phase
     _flightState = FlightState::AIRBRAKE_DEPLOYMENT;
     _stateEntryTime = millis();
   }
@@ -602,27 +610,36 @@ void FlightController::burnoutLoop() {
  * for apogee.
  */
 void FlightController::airbrakeDeploymentLoop() {
+  // Clamp estimator outputs before use to prevent undefined Cd/PID behaviour on NavMEKF divergence
+  float safeAlt = constrain(_filteredAltitude, 0.0f, 5000.0f);
+  float safeVel = constrain(_filteredVerticalVelocity, -500.0f, 500.0f);
+
   // Airbrake control logic
-  _delta_V_ms = lookUpSpeed(_filteredAltitude) - _filteredVerticalVelocity;
+  _delta_V_ms = lookUpSpeed(safeAlt) - safeVel;
 
   _pid_gain = _controller.computePID(0, _delta_V_ms);
-  _cd_gain = _controller.computeCd(apoggeTargetAltitude_m, _filteredAltitude, _filteredVerticalVelocity, -G_GRAVITATIONAL_CONSTANT, RHO_AIR);
+  _cd_gain = _controller.computeCd(apoggeTargetAltitude_m, safeAlt, safeVel, -G_GRAVITATIONAL_CONSTANT, RHO_AIR);
   _controlInput = _pid_gain + _cd_gain;
 
-  if (_tilt < maxTiltAngle) {
-    _airbrakeDeployment = getNearestActuation((_filteredVerticalVelocity / MACH_VELOCITY), _controlInput);
+  // Hysteresis latch: once tilt exceeds threshold, stay retracted for the rest of the deployment
+  if (_tilt >= maxTiltAngle) {
+    _tiltLockout = true;
+  }
+  if (_tiltLockout) {
+    _airbrakeDeployment = 0.0f;
   } else {
-    _airbrakeDeployment = 0.0;
+    _airbrakeDeployment = getNearestActuation((_filteredVerticalVelocity / MACH_VELOCITY), _controlInput);
   }
 
   commandAirbrakes(_airbrakeDeployment);
-
-  // Apogee Detection
-  if (detectApogeeByRegression(_filteredAltitude, millis())) {
-    _flightState = FlightState::APOGEE;
-    _attitudeEstimator->setFilterBeta(1.0f);
-    _stateEntryTime = millis();
-    _apogeeDetectedTime = millis();
+  // Minimum altitude guard: never declare apogee below a certain altitude
+  if (_filteredAltitude >= APOGEE_DETECTION_ARM_ALT_M) {
+    if (detectApogeeByRegression(_filteredAltitude, millis())) {
+      _flightState = FlightState::APOGEE;
+      _attitudeEstimator->setFilterBeta(1.0f);
+      _stateEntryTime = millis();
+      _apogeeDetectedTime = millis();
+    }
   }
 }
 
@@ -673,7 +690,7 @@ void FlightController::landingLoop() {
     DEBUG_PRINTLN_F("Operation finished. Awaiting recovery.");
   }
 
-  // Non-blocking slow-down: use timestamp instead of delay(10000)
+  // Non-blocking slow-down
   static uint32_t _landingLastPrint = 0;
   if (millis() - _landingLastPrint < 10000) return;
   _landingLastPrint = millis();
@@ -701,8 +718,8 @@ void FlightController::forceState(FlightState newState) {
     if (_flightState == FlightState::WAIT_LAUNCH) {
       DataManager::getInstance().setDecimationFactor(10); // Throttle back slightly
       if (_attitudeEstimator) {
-        _attitudeEstimator->setDriftLearning(false); // [FIX] Disabled Integral Windup: Trust the static Gyro Calibration instead.
-        _attitudeEstimator->resetEstimatorState();   // [DIAGNOSTIC] Clear any biases from startup
+        _attitudeEstimator->setDriftLearning(false); // Disabled Integral Windup: Trust the static Gyro Calibration instead.
+        _attitudeEstimator->resetEstimatorState();   // Clear any biases from startup
       }
       _attitudeEstimator->setFilterBeta(10.0f);
       _R_kf(1, 1) = 0.000001f;
@@ -796,9 +813,8 @@ bool FlightController::checkFlightSystemHealth(float filteredAltitude,
     DEBUG_PRINTLN(filteredVerticalVelocity);
     healthOk = false;
   }
-  // ! Add back when a servo is physically connected and attach() succeeds
-  // // Servo Health Check
-  if (!_airbrakeServo.attached()) {
+  // Gate servo health check on HIL mode
+  if (!HIL_MODE_ACTIVE && !_airbrakeServo.attached()) {
     DEBUG_PRINTLN_F("FlightLogic: Health Failure - Servo connection.");
     healthOk = false;
   }

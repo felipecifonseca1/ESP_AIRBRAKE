@@ -108,6 +108,17 @@ float Controller::antiWindUp(float integrative){
 }
 
 /**
+ * @brief Resets the PID integral accumulator and previous error.
+ * @details Call this on entry to any active control state to prevent
+ * windup accumulated during coast/burnout phases from biasing the
+ * first control output.
+ */
+void Controller::resetIntegral() {
+    _integral = 0.0f;
+    _previous_error = 0.0f;
+}
+
+/**
  * @brief Computes the desired drag coefficient (Cd) using inverse dynamics based on the current state.
  * @param desiredApogee Target apogee altitude (m).
  * @param currentAltitude Current altitude of the rocket (m).

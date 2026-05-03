@@ -176,6 +176,7 @@ private:
   // State Detection Functions
   float _airbrakeDeployment = 0.0f;
   float _delta_V_ms = 0.0f;
+  bool _tiltLockout = false; // Latches true once tilt >= maxTiltAngle; stays retracted to avoid chatter
 
   // Controller Constants 
   const float _Kp = PID_KP;

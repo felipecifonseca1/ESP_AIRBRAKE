@@ -57,21 +57,21 @@ constexpr float G_GRAVITATIONAL_CONSTANT = 9.80665f;   // Standard gravity [m/s^
 constexpr float MACH_VELOCITY            = 335.0f;     // Speed of sound at sea level [m/s]
 constexpr float RHO_AIR                  = 1.293f;     // Standard air density [kg/m^3]
 constexpr float ROCKET_MASS_KG           = 30.605f;    // Current rocket mass [kg]
-constexpr float AIRBRAKE_REF_AREA_M2     = 0.02097f;   // Total cross-sectional area of 4 petals [m^2]
+constexpr float AIRBRAKE_REF_AREA_M2     = 0.02097f;   // Refecence area of Cd calculationss [m^2]
 
 // =========================================================================
 // SYSTEM OPERATIONAL SETTINGS
 // =========================================================================
 
-constexpr float Ts_ms                     = 10.0f;     // Control loop period [ms] 
-constexpr float Ts                        = 0.010f;    // Control loop period [s]
-constexpr bool SIMULATE_GPS_TIMING        = false;      // GPS: Simulation timing once every 10 cycles
+constexpr float Ts_ms                     = 20.0f;     // Control loop period [ms] 
+constexpr float Ts                        = 0.020f;    // Control loop period [s]
+constexpr bool SIMULATE_GPS_TIMING        = false;     // GPS: Simulation timing once every 10 cycles
 constexpr float apoggeTargetAltitude_m    = 3254.0f;   // Target mission apogee [m]
 constexpr float maxTiltAngle              = 60.0f;     // Max safety tilt for actuation [deg]
 constexpr float NET_ACC_THRESHOLD         = 0.2f;      // Vertical noise floor [m/s^2]
-constexpr uint32_t WDT_TIMEOUT_MS         = 5000;      // Watchdog timeout in milliseconds
-constexpr bool useRecovery                = false;     // Enable recovery sequence logic
-constexpr uint32_t RTC_SAVE_INTERVAL_MS   = 100;       // Period for state backup
+constexpr uint32_t WDT_TIMEOUT_MS         = 500;       // Watchdog timeout [ms]
+constexpr bool useRecovery                = true;      // Enable recovery sequence logic
+constexpr uint32_t RTC_SAVE_INTERVAL_MS   = 100;       // Period for state backup [ms]
 constexpr bool runBusScan                 = false;     // Run I2C bus scan at startup
 
 // --- IMU & Orientation ---
@@ -101,7 +101,7 @@ namespace AttitudeFilter {
     constexpr uint8_t MEKF     = 4;
     constexpr uint8_t NAV_MEKF = 5;
 }
-constexpr uint8_t DEFAULT_ATTITUDE_FILTER = AttitudeFilter::NAV_MEKF;
+constexpr uint8_t DEFAULT_ATTITUDE_FILTER = AttitudeFilter::MEKF;
 
 namespace MagLocation {
     constexpr uint8_t CUSTOM        = 0;
@@ -115,7 +115,7 @@ constexpr uint8_t DEFAULT_MAG_LOCATION = MagLocation::SAO_PAULO;
 // --- SD Card & Logging ---
 constexpr bool ENABLE_DATA_LOGGING        = true;      // Master switch for all logging
 constexpr bool ENABLE_SD_LOGGING          = true;      // Toggle SD (CSV)
-constexpr bool ENABLE_INTERNAL_LOGGING    = false;      // Toggle Internal Flash (Binary)
+constexpr bool ENABLE_INTERNAL_LOGGING    = true;      // Toggle Internal Flash (Binary)
 constexpr bool ENABLE_EXTERNAL_LOGGING    = false;     // Toggle External Flash (Reserved)
 constexpr bool ENABLE_TELEMETRY           = true;      // Enable real-time monitor prints
 constexpr uint8_t TELEMETRY_LOGGING_DECIMATION = 5;    // Cycles between telemetry prints (10Hz) to save APB bandwidth
@@ -189,9 +189,10 @@ constexpr float ACTUATION_MIN_HEIGHT_M     = 500.0f;   // Start control only abo
 constexpr float ACTUATION_VEL_LIMIT_MACH   = 0.7f;     // Maximum allowed speed for deployment [Mach]
 
 // --- Apogee Detection ---
-constexpr float   APOGEE_VEL_THRESHOLD_MS  = 0.5f;     // Vertical speed threshold for peak [m/s]
-constexpr uint8_t APOGEE_READINGS_CONFIRMATION = 10;   // Readings required to confirm apogee
-constexpr uint8_t APOGEE_REGRESSION_WINDOW  = 30;      // Moving window for polynomial regression
+constexpr float APOGEE_DETECTION_ARM_ALT_M         = 150.0f; // Altitude floor to enable apogee detection
+constexpr float APOGEE_VEL_THRESHOLD_MS            = 0.5f;   // Vertical speed threshold for peak [m/s]
+constexpr uint8_t APOGEE_READINGS_CONFIRMATION     = 10;     // Readings required to confirm apogee
+constexpr uint8_t APOGEE_REGRESSION_WINDOW         = 30;     // Moving window for polynomial regression
 constexpr float   APOGEE_REGRESSION_CONCAVITY_THRESHOLD = -0.05f; // Curve shape threshold
 constexpr float   APOGEE_REGRESSION_DESCENDING_THRESHOLD = -0.5f; // Confirmed descent velocity [m/s]
 

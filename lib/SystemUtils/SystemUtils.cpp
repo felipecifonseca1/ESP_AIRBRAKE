@@ -33,6 +33,7 @@ namespace SystemUtils {
         // Initialize buses
         Wire.begin(PIN_SDA, PIN_SCL);
         Wire.setClock(400000); // 400kHz Fast Mode
+        Wire.setTimeOut(5);    // 5 ms hard ceiling 
         delay(200);
         
         if (runBusScan) {
