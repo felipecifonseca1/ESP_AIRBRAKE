@@ -6,7 +6,6 @@
 #include "driver/gpio.h"
 
 #include <Wire.h>
-#include <EEPROM.h>
 
 namespace SystemUtils {
 
@@ -14,7 +13,7 @@ namespace SystemUtils {
         DEBUG_PRINTLN_F("==== INITIALIZING AIRBRAKE SYSTEM ====");
     }
 
-    bool initCoreHardware(uint16_t eepromSize) {
+    bool initCoreHardware() {
         forceDetachJTAG(); // Force JTAG pins to GPIO mode first
         
         // UART Serial (CDC_ON_BOOT=0): immune to monitor connect/disconnect resets.
@@ -22,13 +21,6 @@ namespace SystemUtils {
         delay(100);
         
         printHeader();
-        
-        bool eepromSuccess = EEPROM.begin(eepromSize);
-        if (!eepromSuccess) {
-            DEBUG_PRINTLN_F("CRITICAL ERROR: Failed to initialize EEPROM!");
-        } else {
-            DEBUG_PRINTLN_F("EEPROM initialized successfully.");
-        }
 
         // Initialize buses
         Wire.begin(PIN_SDA, PIN_SCL);
@@ -44,7 +36,7 @@ namespace SystemUtils {
         setupSinalizacao();
         signalStartupStart();
 
-        return eepromSuccess;
+        return true;
     }
 
     void completeInitialization(uint32_t wdtTimeout) {
@@ -167,6 +159,36 @@ namespace SystemUtils {
         }
         
         DEBUG_PRINTLN_F("-------------------------------\n");
+    }
+
+    /**
+     * @brief 9-clock-toggle I2C bus reset.
+     * Frees an SDA-stuck-low condition caused by an interrupted I2C transaction,
+     * issues a STOP condition, then reinitializes Wire at standard flight parameters.
+     */
+    void resetI2CBus(uint8_t sda, uint8_t scl) {
+        DEBUG_PRINTLN_F("SystemUtils: Performing I2C bus reset...");
+        Wire.end();
+
+        // Toggle SCL 9 times to let the stuck slave release SDA
+        // TODO: Add reset number as a parameter
+        pinMode(scl, OUTPUT);
+        for (int i = 0; i < 9; i++) {
+            digitalWrite(scl, HIGH); delayMicroseconds(5);
+            digitalWrite(scl, LOW);  delayMicroseconds(5);
+        }
+
+        // Issue a STOP condition (SDA LOW → HIGH while SCL HIGH)
+        pinMode(sda, OUTPUT);
+        digitalWrite(sda, LOW);  delayMicroseconds(5);
+        digitalWrite(scl, HIGH); delayMicroseconds(5);
+        digitalWrite(sda, HIGH); delayMicroseconds(5);
+
+        // Reinitialize Wire with standard flight configuration
+        Wire.begin(sda, scl, 400000UL);
+        Wire.setTimeOut(5); // 5 ms hard ceiling
+        delay(10);
+        DEBUG_PRINTLN_F("SystemUtils: I2C bus reset complete.");
     }
 
 } // namespace SystemUtils

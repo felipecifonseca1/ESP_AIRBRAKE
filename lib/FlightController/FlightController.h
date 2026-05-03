@@ -11,8 +11,8 @@
 #include "AttitudeEstimator.h"
 #include "NavMEKF.h"
 
-// --- Data Structures ---
-struct RawFlightData;
+// RawFlightData must be fully defined for the _cachedFlightData member
+#include "DataManager.h"
 
 struct LoopDiagnostics {
     uint32_t sensorRead_us;
@@ -254,7 +254,12 @@ private:
   const uint8_t _printCountLimit = TELEMETRY_LOGGING_DECIMATION;
   bool _telemetryEnabled = ENABLE_TELEMETRY;
 
+  // --- IMU Failure Counter (I2C recovery) ---
+  uint8_t _imuFailCount   = 0;    ///< Consecutive IMU update() failures
+  bool    _useIMUFallback = false; ///< True when IMU is confirmed lost; baro-only mode
+
   // --- Kalman Filter & Estimator State ---
+  RawFlightData _cachedFlightData; ///< Snapshot populated in runStateEstimator(); used by updateLogger()
   KalmanFilter _kf;
   NavMEKF _navMekf;
   Eigen::Matrix<float, 2, 2> _F_kf;

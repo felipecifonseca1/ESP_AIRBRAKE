@@ -119,8 +119,16 @@ public:
     // Pass-through
     MPU9250& getRawDevice() { return _mpu; }
 
+    // --- Stale Data Detection ---
+    bool isDataStale() const { return _dataStale; }
+
 private:
     bool _magDataFresh = false;
+    // Stale-data watchdog state
+    uint8_t _staleCount = 0;
+    bool    _dataStale  = false;
+    float   _lastAx = 0.0f, _lastAy = 0.0f, _lastAz = 0.0f;
+
     void forceBypass();
     void printVector(const char* label, const float values[], float scale, int decimals, const char* unit_label);
     void collectBiasErrors(int samples, float result_accel_g[3], float result_gyro_dps[3], bool physicalZAxisDown);

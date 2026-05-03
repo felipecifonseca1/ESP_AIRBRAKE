@@ -17,7 +17,7 @@
 
 // Modules
 #include "FlightController.h"
-#include "Config_voo.h"
+// Config_voo.h is transitively included via FlightController.h
 #include "BMP280_HAL.h"
 #include "MPU9250_HAL.h"
 #include "AttitudeEstimator.h"
@@ -73,6 +73,14 @@ void TaskFlightControl(void *pvParameters) {
 
     flightController.update(); 
 
+    // One-time stack high-water-mark diagnostic (fires after ~20s of operation)
+    static bool _hwmPrinted = false;
+    if (!_hwmPrinted && flightController.getDiagnostics().totalCycles >= 1000) {
+      DEBUG_PRINTF("Flight task HWM: %u bytes free\n",
+          uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t));
+      _hwmPrinted = true;
+    }
+
     RawFlightData snapshot;
     flightController.updateLogger(snapshot);
     
@@ -119,7 +127,7 @@ void TaskLogging(void *pvParameters) {
             fc.printFullTelemetry(dataToLog);
             uint32_t telDuration = micros() - telStart;
             
-            // Average Telemetry time (Alpha = 0.1)
+            // Average Telemetry time 
             if (ioDiag.telemetryPrint_us == 0) ioDiag.telemetryPrint_us = telDuration;
             else ioDiag.telemetryPrint_us = (ioDiag.telemetryPrint_us * 9 + telDuration) / 10;
 
@@ -271,7 +279,7 @@ void setup() {
   Serial.begin(115200);
   delay(500); // Give serial monitor time to connect
   
-  SystemUtils::initCoreHardware(EEPROM_SIZE);
+  SystemUtils::initCoreHardware();
 
   // ! Do more recovery tests
   // Recovery check

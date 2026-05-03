@@ -12,6 +12,7 @@ extern QueueHandle_t flightDataQueue;
 #include "AltitudeSpeedTable.hh"
 #include "DragCoefficientTable.hh"
 #include "MPU9250_HAL.h"
+#include "SystemUtils.h"
 #include "Sinalizacao.h"
 #include <Arduino.h>
 #include <ArduinoEigen.h>
@@ -202,7 +203,27 @@ bool FlightController::runStateEstimator() {
     _lastEstimatorLoopUs = nowUs;
     filter_dt = dt_actual;
 
-    _attitudeEstimator->getIMU()->update(dt_actual);
+    bool imuOk = _attitudeEstimator->getIMU()->update(dt_actual);
+    if (!imuOk) {
+      _imuFailCount++;
+      DEBUG_PRINTF("IMU: update() failed. Consecutive failures: %u\n", _imuFailCount);
+
+      if (_imuFailCount == 3) {
+        // Attempt bus-level recovery: 9-clock SCL toggle + Wire reinit
+        SystemUtils::resetI2CBus(PIN_SDA, PIN_SCL);
+        // Re-init IMU without recalibration so we don't block
+        static_cast<MPU9250_HAL*>(_attitudeEstimator->getIMU())->init(false, false);
+        DEBUG_PRINTLN_F("IMU: Re-initialized after I2C reset.");
+      }
+      if (_imuFailCount >= 10 && !_useIMUFallback) {
+        _useIMUFallback = true;
+        DEBUG_PRINTLN_F("IMU: *** FALLBACK MODE — using baro-only estimation. ***");
+      }
+      // Use last known good state for this cycle — skip the rest of the real-mode path
+    } else {
+      _imuFailCount   = 0;
+      _useIMUFallback = false;
+    }
     _barometricPressure = baro->getPressurePa();
     _diagnostics.sensorRead_us = micros() - step_us;
 
@@ -215,7 +236,7 @@ bool FlightController::runStateEstimator() {
 
 
     if (_flightState == FlightState::MOTOR_ON) {
-        _attitudeEstimator->setFilterBeta(0.1f); // Smooth during thrust
+        _attitudeEstimator->setFilterBeta(FILTER_BETA_FLIGHT); // Smooth during thrust
     }
   }
 
@@ -264,7 +285,7 @@ bool FlightController::runStateEstimator() {
       float acc_norm_g = acc.norm() / G_GRAVITATIONAL_CONSTANT;
       if (allowLeveling && acc_norm_g >= ORIENTATION_MASK_MIN_G && acc_norm_g <= ORIENTATION_MASK_MAX_G) {
           
-          float adaptive_r_scale = (_flightState == FlightState::DESCENT) ? 25.0f : 1.0f; // Adaptive damping
+          float adaptive_r_scale = (_flightState == FlightState::DESCENT) ? NAV_MEKF_DESCENT_R_SCALE : 1.0f; // Adaptive damping
           
           // Use physical units (m/s^2) for the new NavMEKF updateAccel
           Matrix<float, 3, 3> R_acc = Matrix<float, 3, 3>::Identity() * (NAV_MEKF_ACCEL_R_SCALE * adaptive_r_scale);  
@@ -389,6 +410,7 @@ bool FlightController::runStateEstimator() {
   data.cd_gain = _cd_gain;
   data.flightState = (uint8_t)_flightState;
 
+  _cachedFlightData = data; // Cache for updateLogger()
   return true; // Data valid
 }
 
@@ -400,34 +422,12 @@ void FlightController::resetDiagnostics() {
 }
 
 /**
- * @brief Updates the provided data structure with the current flight state and
- * sensor readings.
- * @param data Reference to the RawFlightData structure to populate.
+ * @brief Fills the provided data structure with current flight data.
+ * @details Uses the snapshot cached in runStateEstimator() — avoids re-reading
+ *          ~30 virtual getters that were already called this cycle.
  */
 void FlightController::updateLogger(RawFlightData &data) {
-  data.timestamp = millis();
-  data.accX = _attitudeEstimator->getIMU()->getAccX();
-  data.accY = _attitudeEstimator->getIMU()->getAccY();
-  data.accZ = _attitudeEstimator->getIMU()->getAccZ();
-  data.gyroX = _attitudeEstimator->getIMU()->getGyroX_rads() * RAD_TO_DEG;
-  data.gyroY = _attitudeEstimator->getIMU()->getGyroY_rads() * RAD_TO_DEG;
-  data.gyroZ = _attitudeEstimator->getIMU()->getGyroZ_rads() * RAD_TO_DEG;
-  data.magX = _attitudeEstimator->getIMU()->getMagX() / 10.0;
-  data.magY = _attitudeEstimator->getIMU()->getMagY() / 10.0;
-  data.magZ = _attitudeEstimator->getIMU()->getMagZ() / 10.0;
-  data.qW = _attitudeEstimator->getQuaternionW();
-  data.qX = _attitudeEstimator->getQuaternionX();
-  data.qY = _attitudeEstimator->getQuaternionY();
-  data.qZ = _attitudeEstimator->getQuaternionZ();
-  data.filteredAltitude = _filteredAltitude;
-  data.filteredVerticalVelocity = _filteredVerticalVelocity;
-  data.netVerticalAcceleration = _netVerticalAcceleration;
-  data.tilt = _tilt;
-  data.barometricPressure = _barometricPressure;
-  data.airbrakeDeployment = _airbrakeDeployment * 100;
-  data.pid_gain = _pid_gain;
-  data.cd_gain = _cd_gain;
-  data.flightState = static_cast<uint8_t>(_flightState);
+  data = _cachedFlightData;
 }
 
 /**
@@ -542,7 +542,7 @@ void FlightController::healthCheckLoop() {
       DataManager::getInstance().startLogging(); // Activate data logging
 
       // System settings for wait-for-launch
-      _attitudeEstimator->setFilterBeta(10.0f); // High initial gain for fast alignment on pad
+    _attitudeEstimator->setFilterBeta(FILTER_BETA_PAD_FAST); // High initial gain for fast alignment on pad
       DEBUG_PRINTLN_F("FlightLogic: Ready for Launch -> WAIT_LAUNCH.");
       _R_kf(1, 1) = 0.000001f; // Reduce velocity measurement variance for ZUKF
       DataManager::getInstance().setDecimationFactor(10);
@@ -562,10 +562,10 @@ void FlightController::healthCheckLoop() {
  */
 void FlightController::waitLaunchLoop() {
   uint32_t timeOnPad = millis() - _stateEntryTime;
-  if (timeOnPad > 5000) {
-    _attitudeEstimator->setFilterBeta(0.05f); // Rock solid stable on pad
+    if (timeOnPad > 5000) {
+    _attitudeEstimator->setFilterBeta(FILTER_BETA_PAD_STABLE); // Rock solid stable on pad
   } else {
-    _attitudeEstimator->setFilterBeta(10.0f); // Faster initial convergence (snaps to gravity)
+    _attitudeEstimator->setFilterBeta(FILTER_BETA_PAD_FAST); // Faster initial convergence (snaps to gravity)
   }
   if (detectLaunch(_netVerticalAcceleration, _filteredAltitude)) {
 
@@ -586,7 +586,7 @@ void FlightController::waitLaunchLoop() {
 void FlightController::motorOnLoop() {
   unsigned long tempoDesdeLancamento = millis() - _launchDetectedTime;
   if (detectBurnout(_netVerticalAcceleration, tempoDesdeLancamento)) {
-    _attitudeEstimator->setFilterBeta(0.1f);
+    _attitudeEstimator->setFilterBeta(FILTER_BETA_FLIGHT);
     _flightState = FlightState::BURNOUT;
     _stateEntryTime = millis();
   }
@@ -636,7 +636,7 @@ void FlightController::airbrakeDeploymentLoop() {
   if (_filteredAltitude >= APOGEE_DETECTION_ARM_ALT_M) {
     if (detectApogeeByRegression(_filteredAltitude, millis())) {
       _flightState = FlightState::APOGEE;
-      _attitudeEstimator->setFilterBeta(1.0f);
+      _attitudeEstimator->setFilterBeta(FILTER_BETA_APOGEE);
       _stateEntryTime = millis();
       _apogeeDetectedTime = millis();
     }
@@ -912,8 +912,9 @@ bool FlightController::detectBurnout(float verticalAcceleration,
   if (_burnoutFullBuffer) {
     movingAverageAcc = _burnoutMovingSum / _burnoutWindowSize;
   } else {
-    int amostrasAtuais = (_burnoutIndexHead == 0) ? 1 : _burnoutIndexHead;
-    movingAverageAcc = _burnoutMovingSum / (float)amostrasAtuais;
+    // Fix: use max(1, head) to avoid dividing by 0 on first sample
+    int validSamples = max(1, (int)_burnoutIndexHead);
+    movingAverageAcc = _burnoutMovingSum / (float)validSamples;
   }
 
   // Check burnout condition
@@ -1006,48 +1007,60 @@ bool FlightController::detectApogeeByRegression(float filteredAltitude,
     return false;
   }
 
-  // 2. Time Normalization (Crucial for float precision)
+  // 2. Time Normalization 
   // Use time relative to the oldest sample in the window (t0)
   int oldestIndex = _regressionHeadIndex; // In a full buffer, head points to
                                           // the oldest element
   float t0 = _regressionTimeBuffer[oldestIndex];
 
   // 3. Accumulate Sums for Least Squares 
-  double sum_t = 0, sum_t2 = 0, sum_t3 = 0, sum_t4 = 0;
-  double sum_y = 0, sum_ty = 0, sum_t2y = 0;
+  float sum_t = 0, sum_t2 = 0, sum_t3 = 0, sum_t4 = 0;
+  float sum_y = 0, sum_ty = 0, sum_t2y = 0;
 
   for (int i = 0; i < _regressionWindowSize; i++) {
     int idx = (oldestIndex + i) % _regressionWindowSize;
 
-    double t = (double)(_regressionTimeBuffer[idx] - t0); // Relative time
-    double y = (double)_regressionAltBuffer[idx];
-    double t2 = t * t;
+    float t  = _regressionTimeBuffer[idx] - t0; // Relative time [0, ~0.6s]
+    float y  = _regressionAltBuffer[idx];
+    float t2 = t * t;
 
-    sum_t += t;
-    sum_t2 += t2;
-    sum_t3 += t2 * t;
-    sum_t4 += t2 * t2;
-
-    sum_y += y;
-    sum_ty += t * y;
-    sum_t2y = sum_t2y + (t2 * y);
+    sum_t   += t;
+    sum_t2  += t2;
+    sum_t3  += t2 * t;
+    sum_t4  += t2 * t2;
+    sum_y   += y;
+    sum_ty  += t * y;
+    sum_t2y += t2 * y;
   }
 
-  // 4. Setup and Solve the Linear System
-  // Matrix A * x = B
-  Matrix3d A;
-  A << (double)_regressionWindowSize, sum_t, sum_t2, sum_t, sum_t2, sum_t3, sum_t2, sum_t3, sum_t4;
+  // 4. Solve Ax = B via Cramer's Rule (3×3 symmetric normal equations)
+  // A = [ N      sum_t   sum_t2 ]    B = [ sum_y   ]
+  //     [ sum_t  sum_t2  sum_t3 ]        [ sum_ty  ]
+  //     [ sum_t2 sum_t3  sum_t4 ]        [ sum_t2y ]
+  const float N   = (float)_regressionWindowSize;
+  const float A00 = N,      A01 = sum_t,  A02 = sum_t2;
+  const float A11 = sum_t2, A12 = sum_t3, A22 = sum_t4;
 
-  Vector3d B;
-  B << sum_y, sum_ty, sum_t2y;
+  float det = A00 * (A11 * A22 - A12 * A12)
+            - A01 * (A01 * A22 - A12 * A02)
+            + A02 * (A01 * A12 - A11 * A02);
 
-  // Solve for x = [c, b, a] (where y = at^2 + bt + c)
-  // LDLT decomposition is faster than full inversion
-  Vector3d x = A.ldlt().solve(B);
+  if (fabsf(det) < 1e-9f) return false; // Singular — not enough altitude variation yet
 
-  float a = (float)x[2]; // Quadratic coefficient (Concavity / Acceleration)
-  float b = (float)x[1]; // Linear coefficient (Initial velocity)
-  // float c = x[0]; // Initial altitude (not used for decision)
+  float inv_det = 1.0f / det;
+
+  // Solve for 'a' (quadratic coefficient — column 2 replaced by B)
+  float a = inv_det * (
+        sum_y  * (A11 * A22 - A12 * A12)
+      - A01    * (sum_ty  * A22 - A12 * sum_t2y)
+      + A02    * (sum_ty  * A12 - A11 * sum_t2y));
+
+  // Solve for 'b' (linear coefficient — column 1 replaced by B)
+  float b = inv_det * (
+        A00    * (sum_ty  * A22 - A12 * sum_t2y)
+      - sum_y  * (A01 * A22 - A12 * A02)
+      + A02    * (A01 * sum_t2y - sum_ty * A02));
+
 
   // 5. Coefficient Analysis
 
@@ -1063,7 +1076,7 @@ bool FlightController::detectApogeeByRegression(float filteredAltitude,
 
   if (isConcave && isDescending) {
     _regressionApogeeConfirmed = true;
-    // DEBUG_PRINTLN_F("APOGEE (Pure Regression) Confirmed!");
+    // DEBUG_PRINTLN_F("APOGEE Confirmed!");
     return true;
   }
 

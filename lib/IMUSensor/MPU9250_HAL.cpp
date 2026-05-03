@@ -1,6 +1,10 @@
 #include "MPU9250_HAL.h"
-#include <EEPROM.h>
+#include <Preferences.h>
 #include "Config_voo.h"
+
+// NVS namespace and magic value for calibration validity
+static constexpr char NVS_NS[]     = "imu_calib";
+static constexpr uint32_t NVS_MAGIC = 0xCAFEBABEu;
 
 /**
  * @brief Constructor.
@@ -25,9 +29,9 @@ bool MPU9250_HAL::init(bool verbose, bool autoCalibrate) {
     _mpuConfig.mag_output_bits = MAG_OUTPUT_BITS::M16BITS;
     _mpuConfig.fifo_sample_rate = FIFO_SAMPLE_RATE::SMPL_200HZ;
     _mpuConfig.gyro_fchoice = 0x03;
-    _mpuConfig.gyro_dlpf_cfg = GYRO_DLPF_CFG::DLPF_41HZ;
+    _mpuConfig.gyro_dlpf_cfg = GYRO_DLPF_CFG::DLPF_20HZ;
     _mpuConfig.accel_fchoice = 0x01;
-    _mpuConfig.accel_dlpf_cfg = ACCEL_DLPF_CFG::DLPF_45HZ;
+    _mpuConfig.accel_dlpf_cfg = ACCEL_DLPF_CFG::DLPF_21HZ;
 
     bool success = _mpu.setup(_i2cAddr, _mpuConfig);
     if (!success) {
@@ -78,23 +82,30 @@ void MPU9250_HAL::clearHardwareOffsets() {
 /**
  * @brief Poll the latest data from the sensor.
  * @param dt Integration time step [s]
- * @return true if a new sample was available and read.
+ * @return true if a new, non-stale sample was available and read.
  */
 bool MPU9250_HAL::update(float dt) {
     _magDataFresh = true; // Always allow filtering in the 50Hz loop for smoother interpolation
-    return _mpu.update(dt); 
+    bool fresh = _mpu.update(dt);
+
+    // Stale-data watchdog: 5 consecutive identical accel readings = sensor frozen
+    float ax = _mpu.getAccX(), ay = _mpu.getAccY(), az = _mpu.getAccZ();
+    bool identical = (ax == _lastAx) && (ay == _lastAy) && (az == _lastAz);
+    _lastAx = ax; _lastAy = ay; _lastAz = az;
+
+    if (identical) { if (_staleCount < 255) _staleCount++; }
+    else           { _staleCount = 0; }
+    _dataStale = (_staleCount >= 5);
+
+    (void)fresh;
+    return !_dataStale;
 }
 
 /**
  * @brief Injects external sensor data for HIL (Hardware-In-the-Loop) simulations.
  */
 void MPU9250_HAL::injectData(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz) {
-    // We use the Ts from Config_voo.h and assume motor_on=false for the filters during injection
-    // Update internal MPU object so that raw getters return HIL data
-    // We pass Gs directly because MPU9250 library getters return the stored 'a' values.
-    // The library expects Gyro in DPS, but HIL data is in Rad/s.
-    // NOTE: This parameterized update bypasses the library's internal hardware bias (error_in_g), 
-    // so we pass simulation data directly.
+
     _mpu.update(Ts, false, false, ax, ay, az, gx * RAD_TO_DEG, gy * RAD_TO_DEG, gz * RAD_TO_DEG, mx, my, mz);
 }
 
@@ -129,11 +140,11 @@ void MPU9250_HAL::calibrateMag() {
 void MPU9250_HAL::calibrateMagVisual() {
     DEBUG_PRINTLN_F("\n--- MAGNETOMETER VISUAL CALIBRATION ---");
     
-    // [FORCE] Ensure I2C Bypass is active
+    // Ensure I2C Bypass is active
     forceBypass();
 
 
-    // [CHECK] Verify Magnetometer is actually there
+    // Verify Magnetometer is actually there
     Wire.beginTransmission(0x0C); // AK8963 Address
     Wire.write(0x00); // WHO_AM_I
     uint8_t err = Wire.endTransmission(false);
@@ -152,17 +163,17 @@ void MPU9250_HAL::calibrateMagVisual() {
         DEBUG_PRINTLN_F("!!!! ERROR: AK8963 not found. Bypass FAILED! Mag will be zero.");
     }
 
-    // [MODE] Force 100Hz 16-bit Continuous Mode (CNTL1 = 0x16)
+    // Force 100Hz 16-bit Continuous Mode (CNTL1 = 0x16)
     Wire.beginTransmission(0x0C);
     Wire.write(0x0A); Wire.write(0x16);
     Wire.endTransmission();
     delay(100);
 
-    // [WAIT] 2-second prep window so the user has time to grab the rocket
+    // 2-second prep window so the user has time to grab the rocket
     DEBUG_PRINTLN_F("GET READY... HOLD STILL (2s)");
     delay(2000);
 
-    // [RESET] Clear any old biases in the library object so we get RAW data
+    // Clear any old biases in the library object so we get RAW data
     _mpu.setMagBias(0, 0, 0);
     _mpu.setMagScale(1, 1, 1);
 
@@ -245,17 +256,8 @@ void MPU9250_HAL::calibrateMagVisual() {
     _mpu.setMagBias(mbx, mby, mbz);
     _mpu.setMagScale(msx, msy, msz);
 
-    // Save to EEPROM
-    float abx, aby, abz, gbx, gby, gbz;
-    EEPROM.get(1, abx); EEPROM.get(5, aby); EEPROM.get(9, abz);
-    EEPROM.get(13, gbx); EEPROM.get(17, gby); EEPROM.get(21, gbz);
-
-    EEPROM.write(0, CALIBRATION_MAGIC);
-    EEPROM.put(1, abx); EEPROM.put(5, aby); EEPROM.put(9, abz);
-    EEPROM.put(13, gbx); EEPROM.put(17, gby); EEPROM.put(21, gbz);
-    EEPROM.put(25, mbx); EEPROM.put(29, mby); EEPROM.put(33, mbz);
-    EEPROM.put(37, msx); EEPROM.put(41, msy); EEPROM.put(45, msz);
-    EEPROM.commit();
+    // Save via the centralized NVS path (preserves accel/gyro biases)
+    saveCalibration(false);
 
     DEBUG_PRINT_F("Saved Mag Bias: ");  DEBUG_PRINT(mbx); DEBUG_PRINT_F(", "); DEBUG_PRINT(mby); DEBUG_PRINT_F(", "); DEBUG_PRINTLN(mbz);
     DEBUG_PRINT_F("Saved Mag Scale: "); DEBUG_PRINT(msx); DEBUG_PRINT_F(", "); DEBUG_PRINT(msy); DEBUG_PRINT_F(", "); DEBUG_PRINTLN(msz);
@@ -320,51 +322,45 @@ void MPU9250_HAL::printVector(const char* label, const float values[], float sca
 }
 
 /**
- * @brief Save current hardware biases and magnetometer params to EEPROM.
+ * @brief Save current hardware biases and magnetometer params to NVS.
  * @param printDebug If true, prints the values being saved.
  */
 void MPU9250_HAL::saveCalibration(bool printDebug) {
-    if (printDebug) DEBUG_PRINTLN_F("Saving IMU calibration to EEPROM...");
-    
-    EEPROM.write(0, CALIBRATION_MAGIC);
-    
-    // Accel Biases (float -> 4 bytes each)
-    float abx = _mpu.getAccBiasX();
-    float aby = _mpu.getAccBiasY();
-    float abz = _mpu.getAccBiasZ();
-    EEPROM.put(1, abx);
-    EEPROM.put(5, aby);
-    EEPROM.put(9, abz);
-    
-    // Gyro Biases
-    float gbx = _mpu.getGyroBiasX();
-    float gby = _mpu.getGyroBiasY();
-    float gbz = _mpu.getGyroBiasZ();
-    EEPROM.put(13, gbx);
-    EEPROM.put(17, gby);
-    EEPROM.put(21, gbz);
-    
-    // Mag Calib (Bias and Scale)
-    EEPROM.put(25, _mpu.getMagBiasX());
-    EEPROM.put(29, _mpu.getMagBiasY());
-    EEPROM.put(33, _mpu.getMagBiasZ());
-    EEPROM.put(37, _mpu.getMagScaleX());
-    EEPROM.put(41, _mpu.getMagScaleY());
-    EEPROM.put(45, _mpu.getMagScaleZ());
-    
-    EEPROM.commit();
+    if (printDebug) DEBUG_PRINTLN_F("Saving IMU calibration to NVS...");
+
+    Preferences prefs;
+    prefs.begin(NVS_NS, false); // read-write
+
+    prefs.putUInt("magic", NVS_MAGIC);
+
+    prefs.putFloat("abx", _mpu.getAccBiasX());
+    prefs.putFloat("aby", _mpu.getAccBiasY());
+    prefs.putFloat("abz", _mpu.getAccBiasZ());
+    prefs.putFloat("gbx", _mpu.getGyroBiasX());
+    prefs.putFloat("gby", _mpu.getGyroBiasY());
+    prefs.putFloat("gbz", _mpu.getGyroBiasZ());
+    prefs.putFloat("mbx", _mpu.getMagBiasX());
+    prefs.putFloat("mby", _mpu.getMagBiasY());
+    prefs.putFloat("mbz", _mpu.getMagBiasZ());
+    prefs.putFloat("msx", _mpu.getMagScaleX());
+    prefs.putFloat("msy", _mpu.getMagScaleY());
+    prefs.putFloat("msz", _mpu.getMagScaleZ());
+
+    prefs.end();
     if (printDebug) DEBUG_PRINTLN_F("IMU calibration saved successfully.");
 }
 
 /**
- * @brief Wipes selected portion of calibration data from EEPROM.
+ * @brief Wipes selected portion of calibration data from NVS.
  * @param type Portions to wipe: ALL, ACCEL_GYRO, or MAG.
  */
 void MPU9250_HAL::eraseCalibration(CalibEraseType type) {
     if (type == CalibEraseType::ALL) {
-        DEBUG_PRINTLN_F("BOOT: Erasing ALL IMU calibration from EEPROM...");
-        EEPROM.write(0, 0xFF); // Invalidate magic number
-        EEPROM.commit();
+        DEBUG_PRINTLN_F("BOOT: Erasing ALL IMU calibration from NVS...");
+        Preferences prefs;
+        prefs.begin(NVS_NS, false);
+        prefs.clear();
+        prefs.end();
         return;
     }
 
@@ -374,8 +370,8 @@ void MPU9250_HAL::eraseCalibration(CalibEraseType type) {
         return;
     }
 
-    // 1. Load the valid totals from EEPROM into the _mpu object
-    loadCalibration(false); 
+    // 1. Load the valid totals from NVS into the _mpu object
+    loadCalibration(false);
 
     if (type == CalibEraseType::ACCEL_GYRO) {
         DEBUG_PRINTLN_F("BOOT: Erasing Accel/Gyro calibration ONLY...");
@@ -388,33 +384,33 @@ void MPU9250_HAL::eraseCalibration(CalibEraseType type) {
         _mpu.setMagScale(1.0f, 1.0f, 1.0f);
     }
 
-    // 2. Commit the new hybrid state (with selected parts zeroed) back to EEPROM
-    // Note: This keeps the CALIBRATION_MAGIC intact so the remaining part is still valid.
+    // 2. Commit the new hybrid state back to NVS
     saveCalibration(true);
 }
 
 /**
- * @brief Load calibration data from EEPROM and apply to hardware registers.
+ * @brief Load calibration data from NVS and apply to hardware registers.
  * @param printDebug If true, prints the loaded values.
  */
 void MPU9250_HAL::loadCalibration(bool printDebug) {
     if (!hasCalibrationData()) {
-        if (printDebug) DEBUG_PRINTLN_F("No valid calibration data in EEPROM.");
+        if (printDebug) DEBUG_PRINTLN_F("No valid calibration data in NVS.");
         return;
     }
 
-    if (printDebug) DEBUG_PRINTLN_F("Loading IMU calibration from EEPROM...");
-    
+    if (printDebug) DEBUG_PRINTLN_F("Loading IMU calibration from NVS...");
+
     clearHardwareOffsets(); // Start from clean slate before applying saved total
 
-    float abx, aby, abz, gbx, gby, gbz;
-    float mbx, mby, mbz, msx, msy, msz;
+    Preferences prefs;
+    prefs.begin(NVS_NS, true); // read-only
 
-    EEPROM.get(1, abx); EEPROM.get(5, aby); EEPROM.get(9, abz);
-    EEPROM.get(13, gbx); EEPROM.get(17, gby); EEPROM.get(21, gbz);
-    
-    EEPROM.get(25, mbx); EEPROM.get(29, mby); EEPROM.get(33, mbz);
-    EEPROM.get(37, msx); EEPROM.get(41, msy); EEPROM.get(45, msz);
+    float abx = prefs.getFloat("abx", 0.0f), aby = prefs.getFloat("aby", 0.0f), abz = prefs.getFloat("abz", 0.0f);
+    float gbx = prefs.getFloat("gbx", 0.0f), gby = prefs.getFloat("gby", 0.0f), gbz = prefs.getFloat("gbz", 0.0f);
+    float mbx = prefs.getFloat("mbx", 0.0f), mby = prefs.getFloat("mby", 0.0f), mbz = prefs.getFloat("mbz", 0.0f);
+    float msx = prefs.getFloat("msx", 1.0f),  msy = prefs.getFloat("msy", 1.0f),  msz = prefs.getFloat("msz", 1.0f);
+
+    prefs.end();
 
     _mpu.setAccBias(abx, aby, abz);
     _mpu.setGyroBias(gbx, gby, gbz);
@@ -435,12 +431,16 @@ void MPU9250_HAL::loadCalibration(bool printDebug) {
 }
 
 /**
- * @brief Checks if valid calibration data exists in EEPROM.
+ * @brief Checks if valid calibration data exists in NVS.
  * @return true if calibration magic number is found and valid.
  */
 bool MPU9250_HAL::hasCalibrationData() {
-    uint8_t magic = EEPROM.read(0);
-    return (magic == CALIBRATION_MAGIC);
+    Preferences prefs;
+    // Open read-write so the namespace is created on first access.
+    prefs.begin(NVS_NS, false);
+    uint32_t magic = prefs.getUInt("magic", 0);
+    prefs.end();
+    return (magic == NVS_MAGIC);
 }
 
 /**

@@ -5,7 +5,6 @@
 #include <ArduinoEigen.h>
 #include "Config_voo.h"
 
-using namespace Eigen;
 
 /**
  * @class NavMEKF
@@ -25,9 +24,9 @@ public:
     /**
      * @brief Initializes the filter matrices
      */
-    void init(const Matrix<float, 3, 1>& initial_pos,
-              const Matrix<float, 3, 1>& initial_vel,
-              const Matrix<float, 4, 1>& initial_quat, 
+    void init(const Eigen::Matrix<float, 3, 1>& initial_pos,
+              const Eigen::Matrix<float, 3, 1>& initial_vel,
+              const Eigen::Matrix<float, 4, 1>& initial_quat, 
               float estimate_covariance, 
               float gyro_cov, float gyro_bias_cov, 
               float accel_proc_cov, float accel_bias_cov);
@@ -38,8 +37,8 @@ public:
      * @param acc_meas Accelerometer reading [x, y, z] in m/s^2
      * @param dt Delta time in seconds
      */
-    void predict(const Matrix<float, 3, 1>& gyro_meas, 
-                 const Matrix<float, 3, 1>& acc_meas, 
+    void predict(const Eigen::Matrix<float, 3, 1>& gyro_meas, 
+                 const Eigen::Matrix<float, 3, 1>& acc_meas, 
                  float dt);
 
     /**
@@ -47,8 +46,8 @@ public:
      * @param acc_meas Raw or aligned accelerometer reading [x, y, z] (G's)
      * @param R_acc Measurement noise covariance (3x3)
      */
-    void updateAccel(const Matrix<float, 3, 1>& acc_meas, 
-                     const Matrix<float, 3, 3>& R_acc);
+    void updateAccel(const Eigen::Matrix<float, 3, 1>& acc_meas, 
+                     const Eigen::Matrix<float, 3, 3>& R_acc);
 
     /**
      * @brief Barometer Update 
@@ -63,8 +62,8 @@ public:
      * @param mag_ref Earth's magnetic field reference vector (normalized)
      * @param R_mag Measurement noise covariance (3x3)
      */
-    void updateMag(const Matrix<float, 3, 1>& mag_meas, 
-                   const Matrix<float, 3, 1>& mag_ref, 
+    void updateMag(const Eigen::Matrix<float, 3, 1>& mag_meas, 
+                   const Eigen::Matrix<float, 3, 1>& mag_ref, 
                    float R_mag);
 
     /**
@@ -72,8 +71,8 @@ public:
      * @param vel_meas Velocity vector [vx, vy, vz] (m/s)
      * @param R_vel Measurement noise covariance (3x3)
      */
-    void updateVelocity(const Matrix<float, 3, 1>& vel_meas, 
-                        const Matrix<float, 3, 3>& R_vel);
+    void updateVelocity(const Eigen::Matrix<float, 3, 1>& vel_meas, 
+                        const Eigen::Matrix<float, 3, 3>& R_vel);
 
     /**
      * @brief GPS Update (6D Position & Velocity)
@@ -81,54 +80,54 @@ public:
      * @param vel_meas GPS Velocity [x, y, z] in m/s
      * @param R_gps Measurement noise covariance (6x6)
      */
-    void updateGPS(const Matrix<float, 3, 1>& pos_meas, 
-                   const Matrix<float, 3, 1>& vel_meas, 
-                   const Matrix<float, 6, 6>& R_gps);
+    void updateGPS(const Eigen::Matrix<float, 3, 1>& pos_meas, 
+                   const Eigen::Matrix<float, 3, 1>& vel_meas, 
+                   const Eigen::Matrix<float, 6, 6>& R_gps);
 
     // --- Getters ---
-    Matrix<float, 3, 1> getPosition() const { return _pos; }
-    Matrix<float, 3, 1> getVelocity() const { return _vel; }
-    Matrix<float, 4, 1> getQuaternion() const { return _quat; }
-    Matrix<float, 3, 1> getAccelBias() const { return _accel_bias; }
-    Matrix<float, 3, 1> getGyroBias() const { return _gyro_bias; }
+    Eigen::Matrix<float, 3, 1> getPosition() const { return _pos; }
+    Eigen::Matrix<float, 3, 1> getVelocity() const { return _vel; }
+    Eigen::Matrix<float, 4, 1> getQuaternion() const { return _quat; }
+    Eigen::Matrix<float, 3, 1> getAccelBias() const { return _accel_bias; }
+    Eigen::Matrix<float, 3, 1> getGyroBias() const { return _gyro_bias; }
 
 private:
     // Nominal States
-    Matrix<float, 3, 1> _pos;
-    Matrix<float, 3, 1> _vel;
-    Matrix<float, 4, 1> _quat; 
-    Matrix<float, 3, 1> _accel_bias;
-    Matrix<float, 3, 1> _gyro_bias;
+    Eigen::Matrix<float, 3, 1> _pos;
+    Eigen::Matrix<float, 3, 1> _vel;
+    Eigen::Matrix<float, 4, 1> _quat; 
+    Eigen::Matrix<float, 3, 1> _accel_bias;
+    Eigen::Matrix<float, 3, 1> _gyro_bias;
 
     // Filter Matrices
-    Matrix<float, 15, 15> _cov;
-    Matrix<float, 15, 15> _G;
+    Eigen::Matrix<float, 15, 15> _cov;
+    Eigen::Matrix<float, 15, 15> _G;
 
     // Process Noise Sub-Matrices
-    Matrix<float, 3, 3> _gyro_cov_mat;
-    Matrix<float, 3, 3> _gyro_bias_cov_mat;
-    Matrix<float, 3, 3> _accel_cov_mat;
-    Matrix<float, 3, 3> _accel_bias_cov_mat;
+    Eigen::Matrix<float, 3, 3> _gyro_cov_mat;
+    Eigen::Matrix<float, 3, 3> _gyro_bias_cov_mat;
+    Eigen::Matrix<float, 3, 3> _accel_cov_mat;
+    Eigen::Matrix<float, 3, 3> _accel_bias_cov_mat;
 
     static constexpr float _G_GRAVITY = G_GRAVITATIONAL_CONSTANT;
 
     // Mathematical Helpers
     void compute_process_covariance(float dt);
-    void injectErrorState(const Matrix<float, 15, 1>& error_state);
+    void injectErrorState(const Eigen::Matrix<float, 15, 1>& error_state);
     
-    Matrix<float, 3, 3> skewSymmetric(const Matrix<float, 3, 1>& v) const;
-    Matrix<float, 4, 1> quatMultiply(const Matrix<float, 4, 1>& q1, const Matrix<float, 4, 1>& q2) const;
-    Matrix<float, 3, 3> quatToMatrix(const Matrix<float, 4, 1>& q) const;
-    Matrix<float, 3, 1> rotateInverse(const Matrix<float, 4, 1>& q, const Matrix<float, 3, 1>& v) const;
+    Eigen::Matrix<float, 3, 3> skewSymmetric(const Eigen::Matrix<float, 3, 1>& v) const;
+    Eigen::Matrix<float, 4, 1> quatMultiply(const Eigen::Matrix<float, 4, 1>& q1, const Eigen::Matrix<float, 4, 1>& q2) const;
+    Eigen::Matrix<float, 3, 3> quatToMatrix(const Eigen::Matrix<float, 4, 1>& q) const;
+    Eigen::Matrix<float, 3, 1> rotateInverse(const Eigen::Matrix<float, 4, 1>& q, const Eigen::Matrix<float, 3, 1>& v) const;
 
     // --- Scratch Matrices ---
-    Matrix<float, 15, 15> _I15;
-    Matrix<float, 15, 15> _F;
-    Matrix<float, 15, 15> _Q;
-    Matrix<float, 15, 15> _temp15x15;
-    Matrix<float, 15, 1>  _K15x1;
-    Matrix<float, 15, 3>  _K15x3;
-    Matrix<float, 15, 6>  _K15x6;
+    Eigen::Matrix<float, 15, 15> _I15;
+    Eigen::Matrix<float, 15, 15> _F;
+    Eigen::Matrix<float, 15, 15> _Q;
+    Eigen::Matrix<float, 15, 15> _temp15x15;
+    Eigen::Matrix<float, 15, 1>  _K15x1;
+    Eigen::Matrix<float, 15, 3>  _K15x3;
+    Eigen::Matrix<float, 15, 6>  _K15x6;
 };
 
 #endif // NAV_MEKF_H

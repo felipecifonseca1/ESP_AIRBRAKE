@@ -20,11 +20,11 @@ namespace SystemUtils {
     void printHeader();
 
     /**
-     * @brief Initializes core hardware: Serial wait, EEPROM, I2C, and Signaling.
-     * @param eepromSize Size of EEPROM to allocate.
-     * @return True if core initialization succeeded (currently focused on EEPROM).
+     * @brief Initializes core hardware: Serial wait, I2C, and Signaling.
+     *        Calibration data now uses Preferences NVS — no EEPROM required.
+     * @return Always true; retained for call-site compatibility.
      */
-    bool initCoreHardware(uint16_t eepromSize);
+    bool initCoreHardware();
 
     /**
      * @brief Finalizes the boot sequence.
@@ -67,6 +67,14 @@ namespace SystemUtils {
      * @brief Prints detailed hardware resource information (Flash/PSRAM) to Serial.
      */
     void checkHardwareResources();
+
+    /**
+     * @brief Performs a 9-clock-toggle I2C bus reset to free a stuck-low SDA line,
+     *        then reinitializes Wire with the standard flight parameters.
+     * @param sda I2C SDA pin number.
+     * @param scl I2C SCL pin number.
+     */
+    void resetI2CBus(uint8_t sda, uint8_t scl);
 
 } // namespace SystemUtils
 
