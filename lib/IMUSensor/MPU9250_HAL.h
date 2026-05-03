@@ -64,9 +64,9 @@ public:
 
     // Magnetometer Alignment (AK8963 vs MPU-9250 frame)
     // Standard (Upright): hx=my, hy=mx, hz=-mz. We flip Y/Z into logical Rocket Frame.
-    float getMagX() const override { return _mpu.getMagY(); }
-    float getMagY() const override { return PHYSICAL_Z_AXIS_DOWN ? -_mpu.getMagX() : _mpu.getMagX(); }
-    float getMagZ() const override { return PHYSICAL_Z_AXIS_DOWN ? _mpu.getMagZ() : -_mpu.getMagZ(); }
+    float getMagX() const override { return _magCalY; }
+    float getMagY() const override { return PHYSICAL_Z_AXIS_DOWN ? -_magCalX : _magCalX; }
+    float getMagZ() const override { return PHYSICAL_Z_AXIS_DOWN ? _magCalZ : -_magCalZ; }
 
     float getTemperature() const override { return _mpu.getTemperature(); }
 
@@ -128,6 +128,16 @@ private:
     uint8_t _staleCount = 0;
     bool    _dataStale  = false;
     float   _lastAx = 0.0f, _lastAy = 0.0f, _lastAz = 0.0f;
+
+    // Advanced Magnetometer Calibration
+    float _magBias[3] = {0.0f, 0.0f, 0.0f};
+    float _magScaleMatrix[3][3] = {
+        {1.0f, 0.0f, 0.0f}, 
+        {0.0f, 1.0f, 0.0f}, 
+        {0.0f, 0.0f, 1.0f}
+    };
+    float _magCalX = 0.0f, _magCalY = 0.0f, _magCalZ = 0.0f;
+    void applyMagCalibration(float raw_x, float raw_y, float raw_z, float* cal_out) const;
 
     void forceBypass();
     void printVector(const char* label, const float values[], float scale, int decimals, const char* unit_label);

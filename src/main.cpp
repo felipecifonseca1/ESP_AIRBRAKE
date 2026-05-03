@@ -73,7 +73,7 @@ void TaskFlightControl(void *pvParameters) {
 
     flightController.update(); 
 
-    // One-time stack high-water-mark diagnostic (fires after ~20s of operation)
+    // One-time stack high-water-mark diagnostic 
     static bool _hwmPrinted = false;
     if (!_hwmPrinted && flightController.getDiagnostics().totalCycles >= 1000) {
       DEBUG_PRINTF("Flight task HWM: %u bytes free\n",
