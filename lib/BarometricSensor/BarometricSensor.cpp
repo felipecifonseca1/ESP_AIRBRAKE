@@ -13,8 +13,6 @@ void BarometricSensor::calibrateGroundReference(int numReadings) {
 
     for (int i = 0; i < numReadings; i++) {
         float p = getPressurePa();
-        // Assume specific wrapper might handle filtering empty reads 
-        // e.g. p == 0 check or Adafruit library internal retry
         accumulatedPressure += p;
         accumulatedTemperature += getTemperatureC();
         delay(20);

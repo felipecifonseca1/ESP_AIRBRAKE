@@ -17,7 +17,6 @@
 
 // Modules
 #include "FlightController.h"
-// Config_voo.h is transitively included via FlightController.h
 #include "BMP280_HAL.h"
 #include "MPU9250_HAL.h"
 #include "AttitudeEstimator.h"

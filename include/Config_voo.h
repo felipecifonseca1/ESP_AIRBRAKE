@@ -82,7 +82,7 @@ constexpr float ATTITUDE_GYRO_CUTOFF_DPS  = 0.00f;     // Gyro Deadband: Ignore 
 
 constexpr bool CALIBRATE_IMU_ON_STARTUP   = true;      // Run library calib ONLY if data is missing
 constexpr bool PRINT_IMU_PARAMS           = false;     // Print biases to Serial at boot
-constexpr bool PERFORM_FINE_TUNING        = false;     // Run iterative bias tweak on every boot
+constexpr bool PERFORM_FINE_TUNING        = true;     // Run iterative bias tweak on every boot
 constexpr bool FORCED_MAG_CALIBRATION     = false;      // Trigger the 30s visual spin routine
 constexpr bool ERASE_CALIB_ON_STARTUP     = false;     // Force delete all saved IMU data
 constexpr float CALIBRATION_ACCEL_TOL_G   = 0.0025f;   // Iterative target for Accel [g]
@@ -113,7 +113,7 @@ namespace MagLocation {
 constexpr uint8_t DEFAULT_MAG_LOCATION = MagLocation::MUNICH;
 
 // --- SD Card & Logging ---
-constexpr bool ENABLE_DATA_LOGGING        = false;      // Master switch for all logging
+constexpr bool ENABLE_DATA_LOGGING        = true;      // Master switch for all logging
 constexpr bool ENABLE_SD_LOGGING          = true;       // Toggle SD (CSV)
 constexpr bool ENABLE_INTERNAL_LOGGING    = false;      // Toggle Internal Flash (Binary)
 constexpr bool ENABLE_EXTERNAL_LOGGING    = false;      // Toggle External Flash (Reserved)
