@@ -1006,13 +1006,13 @@ bool DataManager::ensureSDConnection() {
     delay(500); // Give the card time to internally reset after power-on
     DEBUG_PRINTLN_F("SD: Starting mount sequence...");
 
-    // // 1. Attempt 4-bit at 20MHz (Standard Performance)
-    // DEBUG_PRINTLN_F("SD: Attempting 4-bit, 8MHz...");
-    // if (SD_MMC.begin("/sdcard", false, false, 8000)) {
-    //   DEBUG_PRINTLN_F("SD: Mounted successfully (4-bit, 8MHz).");
-    // }
-
-    // }
+    // 1. Attempt 4-bit at 20MHz (High Performance)
+    DEBUG_PRINTLN_F("SD: Attempting 4-bit, 20MHz...");
+    if (SD_MMC.begin("/sdcard", false, false, 20000)) {
+      DEBUG_PRINTLN_F("SD: Mounted successfully (4-bit, 20MHz).");
+      sdmmcInitialized = true;
+      return true;
+    }
 
 
     // 2. Fallback to 1-bit at 20MHz (Less pins, more stable)

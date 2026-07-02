@@ -12,32 +12,34 @@
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <freertos/FreeRTOS.h>
-#include <freertos/queue.h>
 #include <freertos/event_groups.h>
+#include <freertos/queue.h>
+
 
 // Modules
-#include "FlightController.h"
-#include "BMP280_HAL.h"
-#include "MPU9250_HAL.h"
 #include "AttitudeEstimator.h"
+#include "BMP280_HAL.h"
 #include "DataManager.h"
+#include "FlightController.h"
+#include "MPU9250_HAL.h"
 #include "Sinalizacao.h"
-#include <ArduinoEigen.h>
 #include "SystemUtils.h"
+#include <ArduinoEigen.h>
+
 
 #define EEPROM_SIZE 256 // Define EEPROM size
-
 
 // Flight State & Data
 RawFlightData flightData;
 
 // --- Hardware Instantiation ---
-BMP280_HAL flightBaro(I2C_ADDRESS_BARO); 
+BMP280_HAL flightBaro(I2C_ADDRESS_BARO);
 MPU9250_HAL flightIMU(I2C_ADDRESS_IMU);
 
 // --- Dependency Injection ---
 AttitudeEstimator flightAttitude(&flightIMU);
-FlightController &flightController = FlightController::getInstance(&flightBaro, &flightAttitude);
+FlightController &flightController =
+    FlightController::getInstance(&flightBaro, &flightAttitude);
 
 // --- FreeRTOS Handles ---
 QueueHandle_t flightDataQueue;
@@ -45,7 +47,7 @@ SemaphoreHandle_t serialMutex;
 EventGroupHandle_t systemEventGroup;
 
 // Event bits
-#define EVT_FORCE_SYNC  (1 << 0)  // Signal Core 0 to flush SD/Flash buffers
+#define EVT_FORCE_SYNC (1 << 0) // Signal Core 0 to flush SD/Flash buffers
 
 // --- Task Functions ---
 void TaskFlightControl(void *pvParameters);
@@ -66,29 +68,31 @@ void TaskFlightControl(void *pvParameters) {
     uint32_t start_us = micros();
     static uint32_t last_start_us = 0;
     if (last_start_us > 0) {
-      flightController.getDiagnosticsMutable().loopInterval_us = start_us - last_start_us;
+      flightController.getDiagnosticsMutable().loopInterval_us =
+          start_us - last_start_us;
     }
     last_start_us = start_us;
 
-    flightController.update(); 
+    flightController.update();
 
-    // One-time stack high-water-mark diagnostic 
+    // One-time stack high-water-mark diagnostic
     static bool _hwmPrinted = false;
     if (!_hwmPrinted && flightController.getDiagnostics().totalCycles >= 1000) {
       DEBUG_PRINTF("Flight task HWM: %u bytes free\n",
-          uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t));
+                   uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t));
       _hwmPrinted = true;
     }
 
     RawFlightData snapshot;
     flightController.updateLogger(snapshot);
-    
-    uint32_t t_queue_start = micros();
-    xQueueSend(flightDataQueue, &snapshot, 0); 
-    flightController.getDiagnosticsMutable().queueSend_us = micros() - t_queue_start;
 
-    esp_task_wdt_reset();                        
-    vTaskDelayUntil(&xLastWakeTime, xFrequency); 
+    uint32_t t_queue_start = micros();
+    xQueueSend(flightDataQueue, &snapshot, 0);
+    flightController.getDiagnosticsMutable().queueSend_us =
+        micros() - t_queue_start;
+
+    esp_task_wdt_reset();
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);
   }
 }
 
@@ -104,13 +108,14 @@ void TaskLogging(void *pvParameters) {
     // Block until data arrives in the queue
     if (xQueueReceive(flightDataQueue, &dataToLog, portMAX_DELAY) == pdPASS) {
       uint32_t taskStart = micros();
-      IODiagnostics& ioDiag = logger.getIODiagnosticsMutable();
-      
+      IODiagnostics &ioDiag = logger.getIODiagnosticsMutable();
+
       if (logger.isLoggingActive()) {
         logger.logFlightData(dataToLog);
       }
 
-      // Core 1 signals this bit on critical state transitions (e.g. DESCENT/LANDING).
+      // Core 1 signals this bit on critical state transitions (e.g.
+      // DESCENT/LANDING).
       EventBits_t evBits = xEventGroupGetBits(systemEventGroup);
       if (evBits & EVT_FORCE_SYNC) {
         xEventGroupClearBits(systemEventGroup, EVT_FORCE_SYNC);
@@ -118,19 +123,22 @@ void TaskLogging(void *pvParameters) {
         DEBUG_PRINTLN_F("LOG: forceSync executed on Core 0.");
       }
       // ---------------------------------
-      
+
       // Offloaded Telemetry: Run at decimated rate to avoid saturating Serial
       if (++telemetryDecimation >= TELEMETRY_LOGGING_DECIMATION) {
         if (xSemaphoreTake(serialMutex, 0) == pdPASS) {
-            uint32_t telStart = micros();
-            fc.printFullTelemetry(dataToLog);
-            uint32_t telDuration = micros() - telStart;
-            
-            // Average Telemetry time 
-            if (ioDiag.telemetryPrint_us == 0) ioDiag.telemetryPrint_us = telDuration;
-            else ioDiag.telemetryPrint_us = (ioDiag.telemetryPrint_us * 9 + telDuration) / 10;
+          uint32_t telStart = micros();
+          fc.printFullTelemetry(dataToLog);
+          uint32_t telDuration = micros() - telStart;
 
-            xSemaphoreGive(serialMutex);
+          // Average Telemetry time
+          if (ioDiag.telemetryPrint_us == 0)
+            ioDiag.telemetryPrint_us = telDuration;
+          else
+            ioDiag.telemetryPrint_us =
+                (ioDiag.telemetryPrint_us * 9 + telDuration) / 10;
+
+          xSemaphoreGive(serialMutex);
         }
         telemetryDecimation = 0;
       }
@@ -186,9 +194,10 @@ void TaskSerialComm(void *pvParameters) {
       }
 
       if (cmd == 'w' || cmd == 'W') {
-        DEBUG_PRINTLN_F("Command received: Software Reset (Simulated Crash in 2s)...");
-        delay(2000); 
-        esp_restart(); 
+        DEBUG_PRINTLN_F(
+            "Command received: Software Reset (Simulated Crash in 2s)...");
+        delay(2000);
+        esp_restart();
       }
 
       if (cmd == 'b' || cmd == 'B') {
@@ -226,46 +235,54 @@ void TaskSerialComm(void *pvParameters) {
 
       if (cmd == 'm' || cmd == 'M') {
         if (xSemaphoreTake(serialMutex, pdMS_TO_TICKS(100)) == pdPASS) {
-            const LoopDiagnostics& diag = flightController.getDiagnostics();
-            const IODiagnostics& ioDiag = logger.getIODiagnostics();
-            
-            float successRate = (diag.totalCycles > 0) ? 
-                (1.0f - (float)diag.cyclesExceeded / diag.totalCycles) * 100.0f : 100.0f;
+          const LoopDiagnostics &diag = flightController.getDiagnostics();
+          const IODiagnostics &ioDiag = logger.getIODiagnostics();
 
-            DEBUG_PRINTLN_F("\n--- CORE 1: FLIGHT CONTROL ---");
-            DEBUG_PRINTF("Sensor Read:      %u us\n", diag.sensorRead_us);
-            DEBUG_PRINTF("Inertial (Predict):%u us\n", diag.imuFilter_us);
-            DEBUG_PRINTF("Fusion (Update):   %u us\n", diag.kalmanUpdate_us);
-            DEBUG_PRINTF("State Sync:        %u us\n", diag.navCalc_us);
-            DEBUG_PRINTF("Queue Send:       %u us\n", diag.queueSend_us);
-            DEBUG_PRINTF("Total Execution:  %u us\n", diag.totalExecute_us);
-            DEBUG_PRINTF("Peak Execution:   %u us\n", diag.peakExecution_us);
-            DEBUG_PRINTF("Total Cycles:     %u\n", (uint32_t)diag.totalCycles);
-            DEBUG_PRINTF("Cycles Exceeded:  %u\n", (uint32_t)diag.cyclesExceeded);
-            DEBUG_PRINTF("Success Rate:     %.2f %%\n", successRate);
+          float successRate =
+              (diag.totalCycles > 0)
+                  ? (1.0f - (float)diag.cyclesExceeded / diag.totalCycles) *
+                        100.0f
+                  : 100.0f;
 
-            DEBUG_PRINTLN_F("\n--- CORE 0: I/O & LOGGING ---");
-            DEBUG_PRINTF("SD (Avg Write):   %u us\n", ioDiag.sdWriteAvg_us);
-            DEBUG_PRINTF("SD (Peak Hist):   %u us\n", ioDiag.maxSdWrite_us);
-            DEBUG_PRINTF("Flash (Avg):      %u us\n", ioDiag.internalFlashWriteAvg_us);
-            DEBUG_PRINTF("Flash (Peak):     %u us\n", ioDiag.maxInternalFlashWrite_us);
-            
-            // Phase-aware buffer reporting
-            uint8_t state = diag.flightState; 
-            if (state <= 2) { // PAD phase
-                DEBUG_PRINTF("Flash Buffer:    %u / %u (Pad)\n", ioDiag.internalFlashBufferCount, LOG_PAD_FLUSH_SIZE);
-            } else if (state <= 6) { // ASCENT phase
-                DEBUG_PRINTF("Flash Buffer:    %u / %u (Buffered)\n", ioDiag.internalFlashBufferCount, LOG_BUFFER_SIZE_INT);
-            } else { // DESCENT (7-8)
-                DEBUG_PRINTF("Flash Flushing:  %u remaining\n", ioDiag.internalFlashBufferCount);
-            }
+          DEBUG_PRINTLN_F("\n--- CORE 1: FLIGHT CONTROL ---");
+          DEBUG_PRINTF("Sensor Read:      %u us\n", diag.sensorRead_us);
+          DEBUG_PRINTF("Inertial (Predict):%u us\n", diag.imuFilter_us);
+          DEBUG_PRINTF("Fusion (Update):   %u us\n", diag.kalmanUpdate_us);
+          DEBUG_PRINTF("State Sync:        %u us\n", diag.navCalc_us);
+          DEBUG_PRINTF("Queue Send:       %u us\n", diag.queueSend_us);
+          DEBUG_PRINTF("Total Execution:  %u us\n", diag.totalExecute_us);
+          DEBUG_PRINTF("Peak Execution:   %u us\n", diag.peakExecution_us);
+          DEBUG_PRINTF("Total Cycles:     %u\n", (uint32_t)diag.totalCycles);
+          DEBUG_PRINTF("Cycles Exceeded:  %u\n", (uint32_t)diag.cyclesExceeded);
+          DEBUG_PRINTF("Success Rate:     %.2f %%\n", successRate);
 
-            DEBUG_PRINTF("Telemetry (Avg):  %u us\n", ioDiag.telemetryPrint_us);
-            DEBUG_PRINTF("Total Task Cycle: %u us\n", ioDiag.totalTaskCycle_us);
-            
-            xSemaphoreGive(serialMutex);
+          DEBUG_PRINTLN_F("\n--- CORE 0: I/O & LOGGING ---");
+          DEBUG_PRINTF("SD (Avg Write):   %u us\n", ioDiag.sdWriteAvg_us);
+          DEBUG_PRINTF("SD (Peak Hist):   %u us\n", ioDiag.maxSdWrite_us);
+          DEBUG_PRINTF("Flash (Avg):      %u us\n",
+                       ioDiag.internalFlashWriteAvg_us);
+          DEBUG_PRINTF("Flash (Peak):     %u us\n",
+                       ioDiag.maxInternalFlashWrite_us);
+
+          // Phase-aware buffer reporting
+          uint8_t state = diag.flightState;
+          if (state <= 2) { // PAD phase
+            DEBUG_PRINTF("Flash Buffer:    %u / %u (Pad)\n",
+                         ioDiag.internalFlashBufferCount, LOG_PAD_FLUSH_SIZE);
+          } else if (state <= 6) { // ASCENT phase
+            DEBUG_PRINTF("Flash Buffer:    %u / %u (Buffered)\n",
+                         ioDiag.internalFlashBufferCount, LOG_BUFFER_SIZE_INT);
+          } else { // DESCENT (7-8)
+            DEBUG_PRINTF("Flash Flushing:  %u remaining\n",
+                         ioDiag.internalFlashBufferCount);
+          }
+
+          DEBUG_PRINTF("Telemetry (Avg):  %u us\n", ioDiag.telemetryPrint_us);
+          DEBUG_PRINTF("Total Task Cycle: %u us\n", ioDiag.totalTaskCycle_us);
+
+          xSemaphoreGive(serialMutex);
         } else {
-            DEBUG_PRINTLN_F("WARNING: Serial Mutex Busy. Metrics skipped.");
+          DEBUG_PRINTLN_F("WARNING: Serial Mutex Busy. Metrics skipped.");
         }
       }
     }
@@ -277,7 +294,7 @@ void TaskSerialComm(void *pvParameters) {
 void setup() {
   Serial.begin(115200);
   delay(500); // Give serial monitor time to connect
-  
+
   SystemUtils::initCoreHardware();
 
   // ! Do more recovery tests
@@ -299,21 +316,26 @@ void setup() {
   DEBUG_PRINTLN_F("Initializing SD card...");
   DataManager &logger = DataManager::getInstance();
   SystemUtils::verifyModule(logger.setupSD(), "SD Card", false);
-  
+
   DEBUG_PRINTLN_F("Initializing Internal Flash...");
   SystemUtils::verifyModule(logger.setupInternalFlash(true), "LittleFS", false);
 
   // IMU Setup
   if (isCrashRecovery) {
-      DEBUG_PRINTLN_F("BOOT: Skipping IMU Calibration for Recovery.");
-      SystemUtils::verifyModule(flightIMU.init(true, false), "IMU"); 
+    DEBUG_PRINTLN_F("BOOT: Skipping IMU Calibration for Recovery.");
+    SystemUtils::verifyModule(flightIMU.init(true, false), "IMU");
   } else {
-      SystemUtils::verifyModule(flightIMU.init(true, true), "IMU"); 
+    SystemUtils::verifyModule(flightIMU.init(true, true), "IMU");
   }
 
   // Sensors or HIL setup
   if (HIL_MODE_ACTIVE) {
     DEBUG_PRINTLN_F("**** HIL MODE ACTIVATED ****");
+
+    SystemUtils::verifyModule(flightController.setupServo(), "Servo");
+    flightController.retractAirbrakes();
+    delay(500);
+
     if (logger.initHIL(HIL_FILENAME)) {
 
       HILSimulationData firstSample = logger.readHILStep();
@@ -336,38 +358,40 @@ void setup() {
 
       signalSuccessfullModule("HIL Init");
     } else {
-        DEBUG_PRINTLN_F("HIL FATAL ERROR: File not found!");
-        while (1); 
+      DEBUG_PRINTLN_F("HIL FATAL ERROR: File not found!");
+      while (1)
+        ;
     }
 
   } else {
     DEBUG_PRINTLN_F("Initializing BMP...");
-    SystemUtils::verifyModule(flightBaro.init(), "BMP280"); 
+    SystemUtils::verifyModule(flightBaro.init(), "BMP280");
     flightBaro.calibrateGroundReference(100); // Reads n amount of times for P0
-    
+
     // If Recovering, overwrite P0 from RTC
     if (isCrashRecovery) {
-       if (flightController.attemptRecovery()) {
-           recoverySuccess = true;
-           DEBUG_PRINTLN_F("BOOT: **** FLIGHT RESUMED FROM RTC ****");
-           signalSuccessfullModule("RESUMED");
-           // Skip servo retract
-       } else {
-           DEBUG_PRINTLN_F("BOOT: Recovery failed (Invalid Magic). Normal startup.");
-           isCrashRecovery = false; // Treat as normal
-       }
+      if (flightController.attemptRecovery()) {
+        recoverySuccess = true;
+        DEBUG_PRINTLN_F("BOOT: **** FLIGHT RESUMED FROM RTC ****");
+        signalSuccessfullModule("RESUMED");
+        // Skip servo retract
+      } else {
+        DEBUG_PRINTLN_F(
+            "BOOT: Recovery failed (Invalid Magic). Normal startup.");
+        isCrashRecovery = false; // Treat as normal
+      }
     } else {
-        flightController.resetRecoveryData(); // Clear old trash
+      flightController.resetRecoveryData(); // Clear old trash
     }
-    
+
     if (!recoverySuccess) {
-       DEBUG_PRINTLN_F("**** REAL FLIGHT MODE ACTIVATED ****");
-       // Servo Setup
-       SystemUtils::verifyModule(flightController.setupServo(), "Servo");
-       flightController.retractAirbrakes();
-       delay(500); 
+      DEBUG_PRINTLN_F("**** REAL FLIGHT MODE ACTIVATED ****");
+      // Servo Setup
+      SystemUtils::verifyModule(flightController.setupServo(), "Servo");
+      flightController.retractAirbrakes();
+      delay(500);
     } else {
-       flightController.setupServo(); 
+      flightController.setupServo();
     }
   }
 
@@ -380,7 +404,8 @@ void setup() {
   DEBUG_PRINTLN_F("Initializing Kalman Filter...");
   flightController.setupKalman();
   flightController.getAttitudeEstimator()->setUseMagnetometer(USE_MAGNETOMETER);
-  flightController.getAttitudeEstimator()->setMagnetometerWeight(MAGNETOMETER_FUSION_WEIGHT);
+  flightController.getAttitudeEstimator()->setMagnetometerWeight(
+      MAGNETOMETER_FUSION_WEIGHT);
 
   if (HIL_MODE_ACTIVE) {
     DEBUG_PRINTLN("HIL Mode: Forcing state to WAIT_LAUNCH");

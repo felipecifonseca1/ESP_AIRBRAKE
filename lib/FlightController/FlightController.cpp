@@ -919,7 +919,7 @@ bool FlightController::detectBurnout(float verticalAcceleration,
 
   // Check burnout condition
   if (timeSinceLaunch > _minMotorBurnTime &&
-      abs(movingAverageAcc) < _accelLimitBurnout) {
+      movingAverageAcc < _accelLimitBurnout) { {
     _burnoutCounter++;
   } else {
     _burnoutCounter = 0;
